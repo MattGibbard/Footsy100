@@ -40,8 +40,37 @@ export async function lockedTeams(db: D1Database, now = new Date()): Promise<Map
   return out;
 }
 
+export const MOVERS_WINDOW_DAYS = 7;
+const MOVERS_LIMIT = 10;
+
+// Biggest % risers and fallers over the last week: each player's current price
+// against the price before his first move in the window. Done in SQL to keep CPU low.
+export async function topMovers(db: D1Database, now = new Date()) {
+  const since = new Date(now.getTime() - MOVERS_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const rows = await db
+    .prepare(
+      `WITH firsts AS (
+         SELECT player_id, old_price_pence,
+           ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY created_at, id) AS rn
+         FROM price_history WHERE created_at >= ?1
+       ), moves AS (
+         SELECT p.id AS player_id, f.old_price_pence AS from_pence, p.price_pence AS to_pence,
+           (p.price_pence - f.old_price_pence) * 1.0 / f.old_price_pence AS change
+         FROM firsts f JOIN players p ON p.id = f.player_id
+         WHERE f.rn = 1 AND f.old_price_pence > 0
+       )
+       SELECT 'up' AS dir, * FROM (SELECT * FROM moves WHERE change > 0 ORDER BY change DESC, player_id LIMIT ?2)
+       UNION ALL
+       SELECT 'down' AS dir, * FROM (SELECT * FROM moves WHERE change < 0 ORDER BY change ASC, player_id LIMIT ?2)`,
+    )
+    .bind(since, MOVERS_LIMIT)
+    .all<{ dir: 'up' | 'down'; player_id: number; from_pence: number; to_pence: number }>();
+  const pick = (dir: string) => rows.results.filter((r) => r.dir === dir).map(({ dir: _, ...r }) => r);
+  return { days: MOVERS_WINDOW_DAYS, risers: pick('up'), fallers: pick('down') };
+}
+
 export async function listPlayers(db: D1Database) {
-  const [players, teams, upcoming, locked] = await Promise.all([
+  const [players, teams, upcoming, locked, movers] = await Promise.all([
     db
       .prepare(
         `SELECT id, code, web_name, first_name, second_name, team_id, position, status, price_pence, prev_price_pence
@@ -57,6 +86,7 @@ export async function listPlayers(db: D1Database) {
       .bind(isoSecond(new Date(Date.now() - STALE_FIXTURE_MS)))
       .all<{ id: number; team_h: number; team_a: number; kickoff_time: string }>(),
     lockedTeams(db),
+    topMovers(db),
   ]);
   const next: Record<number, { fixture_id: number; opponent: number; home: boolean; kickoff_time: string }> = {};
   for (const f of upcoming.results) {
@@ -69,6 +99,7 @@ export async function listPlayers(db: D1Database) {
     next_fixtures: next,
     locked_teams: [...locked.keys()],
     lock_hours: LOCK_BEFORE_KICKOFF_MS / 3_600_000,
+    movers,
   };
 }
 

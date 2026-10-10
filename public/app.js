@@ -120,6 +120,7 @@ async function marketPage() {
   app.innerHTML = `
     <h1>Market</h1>
     <p class="muted">Buy shares at today's price. Trading on a player locks ${m.lock_hours} hours before his team kicks off and reopens once the match is settled.</p>
+    ${m.players.length ? moversSection(m) : ''}
     <div class="toolbar">
       <input id="q" placeholder="Search players" value="${esc(prefs.q)}">
       <select id="team"><option value="">All teams</option>${m.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
@@ -173,10 +174,37 @@ async function marketPage() {
       draw();
     }),
   );
-  document.getElementById('rows').addEventListener('click', (e) => {
-    const tr = e.target.closest('tr[data-id]');
-    if (tr) navigate(`/player/${tr.dataset.id}`);
-  });
+  app.querySelectorAll('tbody').forEach((tb) =>
+    tb.addEventListener('click', (e) => {
+      const tr = e.target.closest('tr[data-id]');
+      if (tr) navigate(`/player/${tr.dataset.id}`);
+    }),
+  );
+}
+
+// Top 10 risers and fallers over the last week, by % change.
+function moversSection(m) {
+  const byId = (m.playerById ??= Object.fromEntries(m.players.map((p) => [p.id, p])));
+  const list = (title, rows) => {
+    const body = rows
+      .map((r, i) => {
+        const p = byId[r.player_id];
+        if (!p) return '';
+        const ch = pct(r.to_pence, r.from_pence);
+        return `<tr class="clickable" data-id="${p.id}">
+          <td class="num muted">${i + 1}</td>
+          <td><span class="who">${img('photo', p.code)}<span><b>${esc(p.web_name)}</b> <span class="muted small">${esc(m.teamById[p.team_id]?.short_name)}</span></span></span></td>
+          <td class="num">${money(r.to_pence)}</td>
+          <td class="num ${cls(ch)}">${pctText(ch)}</td>
+        </tr>`;
+      })
+      .join('');
+    return `<div><h2>${title}</h2><div class="table-wrap"><table>
+      <tbody>${body || `<tr><td colspan="4" class="empty">No price moves in the last ${m.movers.days} days yet.</td></tr>`}</tbody>
+    </table></div></div>`;
+  };
+  return `<div class="movers">${list('Top risers', m.movers.risers)}${list('Top fallers', m.movers.fallers)}</div>
+    <p class="muted small">Biggest price changes over the last ${m.movers.days} days. Prices move when a player's match is settled.</p>`;
 }
 
 function sparkline(points) {
