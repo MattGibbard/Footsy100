@@ -209,9 +209,10 @@ async function syncFixtures(db: D1Database, fixturesText: string): Promise<numbe
     chunks.map((chunk) =>
       db
         .prepare(
-          `INSERT INTO fixtures (id, event, team_h, team_a, kickoff_time, started, finished, team_h_score, team_a_score)
+          `INSERT INTO fixtures (id, event, team_h, team_a, kickoff_time, started, finished, finished_provisional, team_h_score, team_a_score)
            SELECT v ->> 'id', v ->> 'event', v ->> 'team_h', v ->> 'team_a', v ->> 'kickoff_time',
-             COALESCE(v ->> 'started', 0), COALESCE(v ->> 'finished', 0), v ->> 'team_h_score', v ->> 'team_a_score'
+             COALESCE(v ->> 'started', 0), COALESCE(v ->> 'finished', 0),
+             COALESCE(v ->> 'finished_provisional', v ->> 'finished', 0), v ->> 'team_h_score', v ->> 'team_a_score'
            FROM (SELECT j.value AS v FROM json_each(?) j) WHERE true
            ON CONFLICT(id) DO UPDATE SET event = excluded.event,
              -- A fixture id reused for a different match (new season) starts unsettled.
@@ -219,11 +220,12 @@ async function syncFixtures(db: D1Database, fixturesText: string): Promise<numbe
                OR (fixtures.finished = 1 AND excluded.finished = 0) THEN NULL ELSE fixtures.settled_at END,
              team_h = excluded.team_h, team_a = excluded.team_a,
              kickoff_time = excluded.kickoff_time, started = excluded.started, finished = excluded.finished,
-             team_h_score = excluded.team_h_score, team_a_score = excluded.team_a_score
+             finished_provisional = excluded.finished_provisional, team_h_score = excluded.team_h_score, team_a_score = excluded.team_a_score
            -- Skip unchanged rows so the every-minute live refresh doesn't eat the free plan's daily write allowance.
            WHERE excluded.event IS NOT fixtures.event OR excluded.team_h != fixtures.team_h OR excluded.team_a != fixtures.team_a
              OR excluded.kickoff_time IS NOT fixtures.kickoff_time OR excluded.started != fixtures.started
-             OR excluded.finished != fixtures.finished OR excluded.team_h_score IS NOT fixtures.team_h_score
+             OR excluded.finished != fixtures.finished OR excluded.finished_provisional != fixtures.finished_provisional
+             OR excluded.team_h_score IS NOT fixtures.team_h_score
              OR excluded.team_a_score IS NOT fixtures.team_a_score`,
         )
         .bind(chunk),

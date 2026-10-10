@@ -17,6 +17,7 @@ interface FakeFixture {
   kickoff_time: string;
   started: boolean;
   finished: boolean;
+  finished_provisional?: boolean;
   team_h_score: number | null;
   team_a_score: number | null;
 }
@@ -238,7 +239,13 @@ describe('trading and settlement', () => {
     provider.fixtures[0].team_h_score = 3;
     expect(await runLiveScores(db, provider)).toEqual([8]);
     expect(calls).toEqual([8]);
-    expect((await listFixtures(db)).fixtures[0]).toMatchObject({ started: 1, finished: 0, team_h_score: 3, team_a_score: 1 });
+    expect((await listFixtures(db)).fixtures[0]).toMatchObject({ started: 1, finished: 0, finished_provisional: 0, team_h_score: 3, team_a_score: 1 });
+
+    // Final whistle: FPL marks it provisionally finished, but prices wait for the confirmed stats.
+    Object.assign(provider.fixtures[0], { finished_provisional: true });
+    await runLiveScores(db, provider);
+    expect((await listFixtures(db)).fixtures[0]).toMatchObject({ finished: 0, finished_provisional: 1 });
+    expect((await runSync(db, provider)).settled).toEqual([]);
   });
 
   it('resets everyone to £100 for a new season and keeps an all-time table', async () => {
