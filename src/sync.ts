@@ -6,6 +6,9 @@ import type { MatchStats } from './pricing';
 import { applyChange, scoreMatch, type Position } from './pricing';
 
 const PLAYER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// A match counts as live from kick-off until FPL marks it finished (which waits
+// for bonus points, so it can be an hour after the final whistle).
+const LIVE_WINDOW_MS = 3 * 60 * 60 * 1000;
 // Settling is the one step that parses JSON in the Worker, so cap it per run.
 const MAX_SETTLEMENTS_PER_RUN = 2;
 
@@ -94,6 +97,23 @@ export async function runSync(db: D1Database, provider: DataProvider, now = new 
   }
 
   return { season, playersSynced: playersDue, fixtures, settled };
+}
+
+// The cron fires every minute but only does the full sync every 15 minutes. In
+// between, if a match is live, it refreshes just that gameweek's scores from
+// FPL's small per-gameweek fixture list. With nothing live it is one query.
+export async function runLiveScores(db: D1Database, provider: DataProvider, now = new Date()): Promise<number[]> {
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 19) + 'Z';
+  const live = await db
+    .prepare(
+      `SELECT DISTINCT event FROM fixtures
+       WHERE kickoff_time BETWEEN ? AND ? AND finished = 0 AND event IS NOT NULL`,
+    )
+    .bind(iso(now.getTime() - LIVE_WINDOW_MS), iso(now.getTime()))
+    .all<{ event: number }>();
+  const events = live.results.map((r) => r.event);
+  for (const event of events) await syncFixtures(db, await provider.gameweekFixturesText(event));
+  return events;
 }
 
 interface DueFixture {
@@ -199,7 +219,12 @@ async function syncFixtures(db: D1Database, fixturesText: string): Promise<numbe
                OR (fixtures.finished = 1 AND excluded.finished = 0) THEN NULL ELSE fixtures.settled_at END,
              team_h = excluded.team_h, team_a = excluded.team_a,
              kickoff_time = excluded.kickoff_time, started = excluded.started, finished = excluded.finished,
-             team_h_score = excluded.team_h_score, team_a_score = excluded.team_a_score`,
+             team_h_score = excluded.team_h_score, team_a_score = excluded.team_a_score
+           -- Skip unchanged rows so the every-minute live refresh doesn't eat the free plan's daily write allowance.
+           WHERE excluded.event IS NOT fixtures.event OR excluded.team_h != fixtures.team_h OR excluded.team_a != fixtures.team_a
+             OR excluded.kickoff_time IS NOT fixtures.kickoff_time OR excluded.started != fixtures.started
+             OR excluded.finished != fixtures.finished OR excluded.team_h_score IS NOT fixtures.team_h_score
+             OR excluded.team_a_score IS NOT fixtures.team_a_score`,
         )
         .bind(chunk),
     ),

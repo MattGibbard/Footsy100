@@ -17,7 +17,7 @@ import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLea
 import { activeSeasonId, buy, ensureAccount, getPlayer, listFixtures, listPlayers, portfolio, recentTrades, sell } from './market';
 import { SELL_FEE_BP, STARTING_CASH_PENCE } from './money';
 import { WEIGHTS } from './pricing';
-import { runSyncRecorded, syncStatus } from './sync';
+import { runLiveScores, runSyncRecorded, syncStatus } from './sync';
 
 type App = { Bindings: Env; Variables: { user: SessionUser | null } };
 const app = new Hono<App>().basePath('/api');
@@ -160,12 +160,23 @@ app.get('/status', async (c) => c.json(await syncStatus(c.env.DB)));
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(
-      runSyncRecorded(env.DB, fplProvider()).then(
-        (r) => console.log('sync ok', JSON.stringify(r)),
-        (e) => console.error('sync failed', e),
-      ),
-    );
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const at = new Date(event.scheduledTime);
+    // The cron runs every minute: the full sync on the quarter hour, live scores in between.
+    if (at.getUTCMinutes() % 15 === 0) {
+      ctx.waitUntil(
+        runSyncRecorded(env.DB, fplProvider()).then(
+          (r) => console.log('sync ok', JSON.stringify(r)),
+          (e) => console.error('sync failed', e),
+        ),
+      );
+    } else {
+      ctx.waitUntil(
+        runLiveScores(env.DB, fplProvider(), at).then(
+          (events) => events.length && console.log('live scores refreshed', JSON.stringify(events)),
+          (e) => console.error('live scores failed', e),
+        ),
+      );
+    }
   },
 } satisfies ExportedHandler<Env>;

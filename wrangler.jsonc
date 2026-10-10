@@ -16,12 +16,13 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Sync fixtures/players and settle finished matches every 15 minutes
+  // Every minute: live scores while a match is on; on the quarter hour, sync
+  // fixtures/players and settle finished matches.
   "observability": { "enabled": true },
   // Required by `wrangler preview`, which Cloudflare runs for pull request builds.
   // Previews get no bindings by default, so preview URLs show the front end only.
   "previews": {},
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": { "crons": ["* * * * *"] },
   "vars": {
     "DEV_MODE": "false"
   },

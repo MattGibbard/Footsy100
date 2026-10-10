@@ -457,6 +457,22 @@ async function fixturesPage() {
     document.getElementById('gw').value = String(e);
     draw();
   };
+  // While a match is on, pick up new scores every minute without a reload.
+  const liveNow = () =>
+    d.fixtures.some((f) => {
+      const since = f.kickoff_time ? Date.now() - new Date(f.kickoff_time).getTime() : -1;
+      return !f.finished && since >= 0 && since < 3 * 3_600_000;
+    });
+  clearInterval(fixturesPage.timer);
+  fixturesPage.timer = setInterval(async () => {
+    if (location.pathname !== '/fixtures') return clearInterval(fixturesPage.timer);
+    if (!liveNow()) return;
+    try {
+      d.fixtures = (await api('/fixtures')).fixtures;
+      draw();
+    } catch {}
+  }, 60_000);
+
   document.getElementById('gw').addEventListener('change', (e) => setEvent(Number(e.target.value)));
   document.getElementById('gw-prev').addEventListener('click', () => setEvent(events[events.indexOf(prefs.event) - 1]));
   document.getElementById('gw-next').addEventListener('click', () => setEvent(events[events.indexOf(prefs.event) + 1]));
