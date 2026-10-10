@@ -14,6 +14,40 @@ const cls = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : 'muted');
 const when = (iso) =>
   iso ? new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z').toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'TBC';
 
+// Official Premier League photos and crests, keyed by FPL's `code` fields. The
+// PL moved its image paths for 2025/26, so the older path is tried next, and a
+// plain placeholder shows if neither has the image (e.g. a new signing).
+const PL_CDN = 'https://resources.premierleague.com/premierleague';
+const IMAGE_URLS = {
+  photo: (c) => [`${PL_CDN}25/photos/players/110x140/${c}.png`, `${PL_CDN}/photos/players/110x140/p${c}.png`],
+  crest: (c) => [`${PL_CDN}25/badges/${c}.svg`, `${PL_CDN}/badges/70/t${c}.png`],
+};
+function img(kind, code, size = 'sm') {
+  const cls = `${kind} ${kind}-${size}`;
+  if (!code) return `<span class="${cls} img-missing" aria-hidden="true"></span>`;
+  const [src, ...fallbacks] = IMAGE_URLS[kind](code);
+  return `<img class="${cls}" src="${src}" data-fallback="${fallbacks.join(' ')}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+}
+// Image errors don't bubble, so listen in the capture phase.
+document.addEventListener(
+  'error',
+  (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLImageElement) || el.dataset.fallback === undefined) return;
+    const [next, ...rest] = el.dataset.fallback.split(' ').filter(Boolean);
+    if (next) {
+      el.dataset.fallback = rest.join(' ');
+      el.src = next;
+    } else {
+      const span = document.createElement('span');
+      span.className = `${el.className} img-missing`;
+      span.setAttribute('aria-hidden', 'true');
+      el.replaceWith(span);
+    }
+  },
+  true,
+);
+
 async function api(path, opts = {}) {
   const res = await fetch(`/api${path}`, {
     ...opts,
@@ -117,8 +151,8 @@ async function marketPage() {
           const nf = m.next_fixtures[p.team_id];
           const opp = nf ? `${esc(m.teamById[nf.opponent]?.short_name)} (${nf.home ? 'H' : 'A'}) · ${when(nf.kickoff_time)}` : '<span class="muted">None</span>';
           return `<tr class="clickable" data-id="${p.id}">
-            <td><b>${esc(p.web_name)}</b>${p.status !== 'a' ? ' <span class="badge" title="Availability flag from FPL">!</span>' : ''}${m.locked.has(p.team_id) ? ' <span class="badge lock show-sm">Locked</span>' : ''}</td>
-            <td>${esc(m.teamById[p.team_id]?.short_name)}</td>
+            <td><span class="who">${img('photo', p.code)}<span><b>${esc(p.web_name)}</b>${p.status !== 'a' ? ' <span class="badge" title="Availability flag from FPL">!</span>' : ''}${m.locked.has(p.team_id) ? ' <span class="badge lock show-sm">Locked</span>' : ''}</span></span></td>
+            <td><span class="who">${img('crest', m.teamById[p.team_id]?.code)}${esc(m.teamById[p.team_id]?.short_name)}</span></td>
             <td><span class="badge pos">${p.position}</span></td>
             <td class="num">${money(p.price_pence)}</td>
             <td class="num ${cls(ch)}">${p.prev_price_pence ? pctText(ch) : '–'}</td>
@@ -169,7 +203,7 @@ function upcomingFixtures(list, teamId, teamById) {
   return `
     <h2>Next match</h2>
     <div class="card next-match">
-      <div class="nm-teams">${esc(teamById[next.team_h]?.name)} <span class="muted">v</span> ${esc(teamById[next.team_a]?.name)}</div>
+      <div class="nm-teams"><span class="who">${img('crest', teamById[next.team_h]?.code)}${esc(teamById[next.team_h]?.name)}</span> <span class="muted">v</span> <span class="who">${img('crest', teamById[next.team_a]?.code)}${esc(teamById[next.team_a]?.name)}</span></div>
       <div class="muted">${n.home ? 'Home' : 'Away'} vs ${esc(n.opp?.name)}${next.event ? ` · Gameweek ${next.event}` : ''}</div>
       <div class="nm-when">${next.started ? '<span class="badge lock">In play</span>' : when(next.kickoff_time)}</div>
       ${lockAt && !next.started ? `<div class="small muted">Trading on him locks ${when(lockAt)}</div>` : ''}
@@ -179,7 +213,7 @@ function upcomingFixtures(list, teamId, teamById) {
         ? `<div class="table-wrap coming-up"><table><tbody>${rest
             .map((f) => {
               const v = vs(f);
-              return `<tr><td>${esc(v.opp?.name)} (${v.home ? 'H' : 'A'})</td><td class="small muted">${f.event ? `GW${f.event}` : ''}</td><td class="num small">${when(f.kickoff_time)}</td></tr>`;
+              return `<tr><td><span class="who">${img('crest', v.opp?.code)}${esc(v.opp?.name)} (${v.home ? 'H' : 'A'})</span></td><td class="small muted">${f.event ? `GW${f.event}` : ''}</td><td class="num small">${when(f.kickoff_time)}</td></tr>`;
             })
             .join('')}</tbody></table></div>`
         : ''
@@ -197,8 +231,13 @@ async function playerPage(id) {
 
   app.innerHTML = `
     <p><a href="/" data-link>← Market</a></p>
-    <h1>${esc(p.first_name)} ${esc(p.second_name)}</h1>
-    <p class="muted">${esc(p.team_name)} · ${p.position}</p>
+    <div class="player-head">
+      ${img('photo', p.code, 'lg')}
+      <div>
+        <h1>${esc(p.first_name)} ${esc(p.second_name)}</h1>
+        <p class="muted who">${img('crest', p.team_code)}${esc(p.team_name)} · ${p.position}</p>
+      </div>
+    </div>
     <div class="grid grid-2">
       <div>
         <div class="stats">
@@ -217,7 +256,7 @@ async function playerPage(id) {
               const home = s.team_h === p.team_id;
               const opp = m.teamById[home ? s.team_a : s.team_h]?.short_name;
               const key = Object.entries(STAT_LABELS).filter(([k]) => s[k]).map(([k, l]) => `${l}${s[k] > 1 ? '×' + s[k] : ''}`).join(' · ');
-              return `<tr><td>${esc(opp)} (${home ? 'H' : 'A'}) ${s.team_h_score ?? ''}–${s.team_a_score ?? ''}<div class="small muted">${when(s.kickoff_time)}</div></td>
+              return `<tr><td>${img('crest', m.teamById[home ? s.team_a : s.team_h]?.code)} ${esc(opp)} (${home ? 'H' : 'A'}) ${s.team_h_score ?? ''}–${s.team_a_score ?? ''}<div class="small muted">${when(s.kickoff_time)}</div></td>
                 <td class="num">${s.minutes}</td><td class="small">${key || '<span class="muted">–</span>'}</td>
                 <td class="num ${cls(s.change_bp)}">${pctText(s.change_bp / 100)}</td></tr>`;
             })
@@ -308,7 +347,7 @@ async function portfolioPage() {
         .map((h) => {
           const gain = h.value_pence - h.cost_pence;
           return `<tr class="clickable" onclick="history.pushState(null,'','/player/${h.player_id}');dispatchEvent(new PopStateEvent('popstate'))">
-            <td><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span></td>
+            <td><span class="who">${img('photo', h.code)}<span><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span></span></span></td>
             <td class="num">${shares(h.shares_micro)}</td><td class="num">${money(h.price_pence)}</td>
             <td class="num">${money(h.value_pence)}</td><td class="num ${cls(gain)}">${gain >= 0 ? '+' : ''}${money(gain)}</td></tr>`;
         })
@@ -351,7 +390,7 @@ async function fixturesPage() {
     const mid = f.finished || live ? `<b>${f.team_h_score ?? 0} – ${f.team_a_score ?? 0}</b>` : f.kickoff_time ? new Date(f.kickoff_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'TBC';
     // Locks by team are for trading; only flag the match that is actually causing the lock.
     const lockedNow = !f.finished && f.kickoff_time && new Date(f.kickoff_time).getTime() - Date.now() <= d.lock_hours * 3_600_000 && (locked.has(f.team_h) || locked.has(f.team_a));
-    const team = (id, side) => `<a href="/" class="fx-team ${side}" data-team="${id}"><span class="hide-sm">${esc(teamById[id]?.name)}</span><span class="show-sm">${esc(teamById[id]?.short_name)}</span></a>`;
+    const team = (id, side) => `<a href="/" class="fx-team ${side}" data-team="${id}">${img('crest', teamById[id]?.code)}<span class="hide-sm">${esc(teamById[id]?.name)}</span><span class="show-sm">${esc(teamById[id]?.short_name)}</span></a>`;
     return `<div class="fx-row">
       ${team(f.team_h, 'home')}
       <div class="fx-mid">${mid}${live ? '<div class="small up">Live</div>' : f.finished ? '<div class="small muted">FT</div>' : lockedNow ? '<div><span class="badge lock">Locked</span></div>' : ''}</div>

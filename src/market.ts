@@ -44,11 +44,11 @@ export async function listPlayers(db: D1Database) {
   const [players, teams, upcoming, locked] = await Promise.all([
     db
       .prepare(
-        `SELECT id, web_name, first_name, second_name, team_id, position, status, price_pence, prev_price_pence
+        `SELECT id, code, web_name, first_name, second_name, team_id, position, status, price_pence, prev_price_pence
          FROM players ORDER BY price_pence DESC`,
       )
       .all(),
-    db.prepare('SELECT id, name, short_name FROM teams ORDER BY name').all(),
+    db.prepare('SELECT id, name, short_name, code FROM teams ORDER BY name').all(),
     db
       .prepare(
         `SELECT id, team_h, team_a, kickoff_time FROM fixtures
@@ -75,7 +75,7 @@ export async function listPlayers(db: D1Database) {
 export async function getPlayer(db: D1Database, id: number, userId: number | null) {
   const player = await db
     .prepare(
-      `SELECT p.*, t.name AS team_name, t.short_name AS team_short FROM players p JOIN teams t ON t.id = p.team_id WHERE p.id = ?`,
+      `SELECT p.*, t.name AS team_name, t.short_name AS team_short, t.code AS team_code FROM players p JOIN teams t ON t.id = p.team_id WHERE p.id = ?`,
     )
     .bind(id)
     .first<{ team_id: number }>();
@@ -136,7 +136,7 @@ export async function listFixtures(db: D1Database) {
          ORDER BY kickoff_time IS NULL, kickoff_time, id`,
       )
       .all<{ event: number | null; finished: number }>(),
-    db.prepare('SELECT id, name, short_name FROM teams ORDER BY name').all(),
+    db.prepare('SELECT id, name, short_name, code FROM teams ORDER BY name').all(),
     lockedTeams(db),
   ]);
   // The gameweek to open on: the earliest one with a match still to finish.
@@ -158,7 +158,7 @@ export async function portfolio(db: D1Database, userId: number) {
     db
       .prepare(
         `SELECT h.player_id, h.shares_micro, h.cost_pence, p.web_name, p.position, p.price_pence, p.prev_price_pence,
-           p.team_id, t.short_name AS team_short
+           p.team_id, p.code, t.short_name AS team_short, t.code AS team_code
          FROM holdings h JOIN players p ON p.id = h.player_id JOIN teams t ON t.id = p.team_id
          WHERE h.user_id = ? AND h.season_id = ? AND h.shares_micro > 0
          ORDER BY h.shares_micro * p.price_pence DESC`,

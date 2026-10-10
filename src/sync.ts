@@ -150,9 +150,9 @@ async function syncTeamsAndPlayers(db: D1Database, bootstrap: string, resetPrice
   const stmts = [
     db
       .prepare(
-        `INSERT INTO teams (id, name, short_name)
-         SELECT j.value ->> 'id', j.value ->> 'name', j.value ->> 'short_name' FROM json_each(?) j WHERE true
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name`,
+        `INSERT INTO teams (id, name, short_name, code)
+         SELECT j.value ->> 'id', j.value ->> 'name', j.value ->> 'short_name', j.value ->> 'code' FROM json_each(?) j WHERE true
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name, code = excluded.code`,
       )
       .bind(sliceArray(bootstrap, 'teams')),
   ];
@@ -162,12 +162,12 @@ async function syncTeamsAndPlayers(db: D1Database, bootstrap: string, resetPrice
     stmts.push(
       db
         .prepare(
-          `INSERT INTO players (id, first_name, second_name, web_name, team_id, position, status, price_pence)
-           SELECT v ->> 'id', v ->> 'first_name', v ->> 'second_name', v ->> 'web_name', v ->> 'team',
+          `INSERT INTO players (id, code, first_name, second_name, web_name, team_id, position, status, price_pence)
+           SELECT v ->> 'id', v ->> 'code', v ->> 'first_name', v ->> 'second_name', v ->> 'web_name', v ->> 'team',
              CASE v ->> 'element_type' WHEN 1 THEN 'GKP' WHEN 2 THEN 'DEF' WHEN 3 THEN 'MID' ELSE 'FWD' END,
              v ->> 'status', (v ->> 'now_cost') * 10
            FROM (SELECT j.value AS v FROM json_each(?) j) WHERE (v ->> 'element_type') BETWEEN 1 AND 4
-           ON CONFLICT(id) DO UPDATE SET first_name = excluded.first_name, second_name = excluded.second_name,
+           ON CONFLICT(id) DO UPDATE SET code = excluded.code, first_name = excluded.first_name, second_name = excluded.second_name,
              web_name = excluded.web_name, team_id = excluded.team_id, position = excluded.position,
              status = excluded.status
              ${resetPrices ? ', price_pence = excluded.price_pence, prev_price_pence = NULL' : ''}`,

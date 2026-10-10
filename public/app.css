@@ -103,9 +103,21 @@ tr:last-child td { border-bottom: 0; }
 .fx-card { padding: 0; }
 .fx-row { display: grid; grid-template-columns: 1fr 96px 1fr; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .fx-row:last-child { border-bottom: 0; }
-.fx-team { display: block; color: var(--text); font-weight: 500; }
-.fx-team.home { text-align: right; }
+.fx-team { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 500; min-width: 0; }
+.fx-team.home { flex-direction: row-reverse; text-align: right; }
 .fx-mid { text-align: center; font-variant-numeric: tabular-nums; }
+
+/* Player photos and club crests (hotlinked from the Premier League's image CDN) */
+.who { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+.photo, .crest { flex: none; display: inline-block; vertical-align: middle; }
+.photo { border-radius: 50%; object-fit: cover; object-position: top; background: var(--panel-2); border: 1px solid var(--line); }
+.photo-sm { width: 32px; height: 32px; }
+.photo-lg { width: 88px; height: 112px; border-radius: var(--radius); object-fit: contain; object-position: bottom; }
+.crest { object-fit: contain; }
+.crest-sm { width: 20px; height: 20px; }
+.crest.img-missing { border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line); }
+.player-head { display: flex; align-items: flex-end; gap: 16px; }
+.player-head p { margin: 0 0 4px; }
 
 .show-sm { display: none; }
 @media (max-width: 640px) {
@@ -113,4 +125,6 @@ tr:last-child td { border-bottom: 0; }
   .show-sm { display: inline-block; }
   th, td { padding: 8px; }
   .account { margin-left: 0; }
+  .photo-sm { width: 26px; height: 26px; }
+  .photo-lg { width: 66px; height: 84px; }
 }
