@@ -211,6 +211,15 @@ function buyRow(p, matchState, compact = false) {
   return `<div class="buy-row">${compact ? '' : stepper(1000, 'Number of cards to buy')}<button class="btn-band" data-buy="${p.id}" data-price="${p.price_pence}">${buyLabel(1, p.price_pence)}</button></div>`;
 }
 
+// The sell controls on a card you own (My cards): how many to sell, the net after the fee, and a quiet link to buy more.
+function sellRow(p, held, matchState) {
+  const more = `<a class="small buy-more" href="/player/${p.id}" data-link>Buy more</a>`;
+  if (matchState) return `<div class="buy-row"><button class="btn-band" disabled>${MATCH_STATES[matchState].label}</button></div><p class="quote">${more}</p>`;
+  return `<div class="buy-row">${stepper(held, 'Number of cards to sell')}<button class="btn-band sell" data-sell="${p.id}" data-price="${p.price_pence}">${sellLabel(1, p.price_pence)}</button></div>
+      <p class="quote" data-sell-quote>${money(p.price_pence)} less the ${money(saleQuote(1, p.price_pence).fee)} fee (${FEE_BP() / 100}%).</p>
+      <p class="small sell-links">${held > 1 ? `<button class="link" data-sell="${p.id}" data-all="1">Sell all ${held} for ${money(saleQuote(held, p.price_pence).net)}</button> · ` : ''}${more}</p>`;
+}
+
 // p: a player row from /players (id, code, web_name, team_id, position, status, price_pence, prev_price_pence).
 function playerCard(p, m, o = {}) {
   const team = m.teamById[p.team_id];
@@ -227,7 +236,7 @@ function playerCard(p, m, o = {}) {
       <h3 class="name"><a href="/player/${p.id}" data-link>${esc(p.web_name)}</a></h3>
       <div><span class="caption">Price · last 5 matches</span>${formBars(form.length ? form : [p.price_pence])}</div>
       <div class="row">${diff != null ? `<span class="since">${signedMoney(diff)} since full time</span><span class="change ${cls(ch)}">${pctText(ch)}</span>` : '<span class="since">No matches settled yet</span>'}</div>
-      ${o.buy === false ? '' : buyRow(p, matchState, o.compact)}
+      ${o.sell ? `<div class="row"><span class="since">Paid ${money(o.sell.cost)} for ${cardsText(owned)}</span><span class="change ${cls(o.sell.gain)}">${signedMoney(o.sell.gain)}</span></div>${sellRow(p, owned, matchState)}` : o.buy === false ? '' : buyRow(p, matchState, o.compact)}
     </div>
   </article>`;
 }
@@ -268,6 +277,8 @@ document.addEventListener('click', async (e) => {
     await refreshWallet();
     const onPlayerPage = location.pathname === `/player/${id}`;
     if (onPlayerPage) return void (await playerPage(id));
+    // On My cards a sale changes the totals and may remove the card, so redraw the page.
+    if (location.pathname === '/portfolio') return void (await portfolioPage());
     // Elsewhere, redraw just this card so the page doesn't jump.
     const card = btn.closest('[data-card]');
     const m = state.market;
@@ -746,7 +757,11 @@ async function portfolioPage() {
     )}<p class="small muted chart-note">From your ${money(state.config?.starting_cash_pence ?? 10000)} start to now, with a point added each day.</p></div>
     ${
       pf.holdings.length
-        ? `<div class="card-grid">${pf.holdings.map((h) => playerCard(m.playerById[h.player_id] ?? { ...h, id: h.player_id }, m)).join('')}</div>
+        ? `<h2>Sell your cards</h2>
+      <p class="small muted">Pick how many to sell. You get the price shown less the ${FEE_BP() / 100}% fee. To buy more of a player, open his card.</p>
+      <div class="card-grid">${pf.holdings
+        .map((h) => playerCard(m.playerById[h.player_id] ?? { ...h, id: h.player_id }, m, { sell: { cost: h.cost_pence, gain: h.value_pence - h.cost_pence } }))
+        .join('')}</div>
       <h2>Breakdown</h2>
       <div class="table-wrap"><table><thead><tr><th>Player</th><th class="num">Cards</th><th class="num">Price</th><th class="num">Value</th><th class="num">Gain</th></tr></thead><tbody>
       ${pf.holdings
