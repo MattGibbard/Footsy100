@@ -276,6 +276,8 @@ describe('trading and settlement', () => {
     provider.fixtures[0].kickoff_time = iso(Date.now() - 2.6 * HOUR);
     expect((await runSync(db, provider)).settled).toEqual([1]);
     expect((await listPlayers(db)).locked_teams).toEqual([]);
+    // Settled, so the player page stops showing it as the next match even though FPL hasn't marked it finished.
+    expect((await getPlayer(db, 100, null)).upcoming).toEqual([]);
 
     // ...and prices don't move again when FPL finally marks it finished.
     provider.fixtures[0].finished = true;
