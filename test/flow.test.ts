@@ -3,7 +3,7 @@ import { emptyStats, type DataProvider } from '../src/fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues } from '../src/leagues';
 import { buy, getPlayer, listFixtures, listPlayers, portfolio, sell, topMovers } from '../src/market';
 import type { MatchStats } from '../src/pricing';
-import { runSync } from '../src/sync';
+import { runLiveScores, runSync } from '../src/sync';
 import { createD1 } from './d1shim';
 
 const HOUR = 3_600_000;
@@ -225,6 +225,20 @@ describe('trading and settlement', () => {
     await leaveLeague(db, bob, league.id);
     await leaveLeague(db, alice, league.id);
     expect(await myLeagues(db, alice)).toEqual([]);
+  });
+
+  it('refreshes live scores between full syncs, and does nothing when no match is on', async () => {
+    const calls: number[] = [];
+    const gameweek = provider.gameweekFixturesText.bind(provider);
+    provider.gameweekFixturesText = async (event) => (calls.push(event), gameweek(event));
+    expect(await runLiveScores(db, provider)).toEqual([]);
+
+    provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - HOUR), started: true, team_h_score: 2, team_a_score: 1 };
+    await runSync(db, provider);
+    provider.fixtures[0].team_h_score = 3;
+    expect(await runLiveScores(db, provider)).toEqual([8]);
+    expect(calls).toEqual([8]);
+    expect((await listFixtures(db)).fixtures[0]).toMatchObject({ started: 1, finished: 0, team_h_score: 3, team_a_score: 1 });
   });
 
   it('resets everyone to £100 for a new season and keeps an all-time table', async () => {
