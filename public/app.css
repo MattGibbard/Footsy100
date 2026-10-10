@@ -121,7 +121,9 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 button.link { background: none; border: 0; color: var(--ink-300); padding: 0; text-decoration: underline; }
 
 .toolbar { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin: var(--space-4) 0 var(--space-5); }
-.toolbar input { flex: 1 1 220px; max-width: 320px; }
+.toolbar input:not([type="checkbox"]) { flex: 1 1 220px; max-width: 320px; }
+.toolbar .check { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 4px; color: var(--ink-200); white-space: nowrap; cursor: pointer; }
+.toolbar .check input { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: var(--gold-500); cursor: pointer; }
 .seg { display: inline-flex; border: 1px solid var(--line-200); border-radius: var(--radius-md); overflow: hidden; height: 44px; }
 .seg button, .seg select { border: 0; border-radius: 0; background: transparent; color: var(--ink-300); padding: 0 14px; height: 42px; }
 .seg button.on { background: var(--navy-700); color: var(--ink-100); }
@@ -401,7 +403,7 @@ td.rank { font-family: var(--font-display); font-weight: 800; font-size: 20px; c
   th, td { padding: 8px 10px; }
   .card-grid { grid-template-columns: 1fr; }
   .card-grid.small { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
-  .toolbar input { max-width: none; }
+  .toolbar input:not([type="checkbox"]) { max-width: none; }
 }
 
 /* ---------- price explanations ---------- */
