@@ -530,8 +530,10 @@ function wireMarket(m) {
 }
 
 // Top 10 risers and fallers over the last week, by % change. Each photo is ringed in its card's band colour.
+// One panel: both lists side by side on wide screens, a Risers / Fallers switch on narrow ones.
+let moversSide = 'risers';
 function moversSection(m) {
-  const list = (title, rows) => {
+  const list = (side, title, rows) => {
     const body = rows
       .map((r, i) => {
         const p = m.playerById[r.player_id];
@@ -543,10 +545,24 @@ function moversSection(m) {
           <span class="val">${money(r.to_pence)}</span><span class="chg ${cls(ch)}">${pctText(ch)}</span></li>`;
       })
       .join('');
-    return `<div class="panel tight"><h3>${title}</h3><ol class="ranks">${body || `<li class="empty muted">No price moves in the last ${m.movers.days} days yet.</li>`}</ol></div>`;
+    return `<div class="movers-col" data-side="${side}"><h3>${title}</h3><ol class="ranks">${body || `<li class="empty muted">No price moves in the last ${m.movers.days} days yet.</li>`}</ol></div>`;
   };
-  return `<h2>Movers this week</h2><div class="movers">${list('Top risers', m.movers.risers)}${list('Top fallers', m.movers.fallers)}</div>`;
+  const sw = `<div class="seg movers-switch" role="group" aria-label="Show risers or fallers">${[['risers', 'Risers'], ['fallers', 'Fallers']]
+    .map(([k, label]) => `<button type="button" data-movers="${k}" class="${moversSide === k ? 'on' : ''}" aria-pressed="${moversSide === k}">${label}</button>`)
+    .join('')}</div>`;
+  return `<h2>Movers this week</h2><div class="panel tight movers" data-show="${moversSide}">${sw}<div class="movers-cols">${list('risers', 'Top risers', m.movers.risers)}${list('fallers', 'Top fallers', m.movers.fallers)}</div></div>`;
 }
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-movers]');
+  if (!b) return;
+  moversSide = b.dataset.movers;
+  const panel = b.closest('.movers');
+  panel.dataset.show = moversSide;
+  panel.querySelectorAll('[data-movers]').forEach((x) => {
+    x.classList.toggle('on', x === b);
+    x.setAttribute('aria-pressed', x === b);
+  });
+});
 document.addEventListener('click', (e) => {
   const li = e.target.closest('li[data-player]');
   if (li) navigate(`/player/${li.dataset.player}`);

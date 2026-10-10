@@ -268,8 +268,17 @@ button.link { background: none; border: 0; color: var(--ink-300); padding: 0; te
 /* Movers: the photo ring shows the card's band (gold / silver / bronze). */
 .ranks li.rarity .photo { border: 2px solid var(--edge); box-shadow: 0 0 0 2px var(--card); }
 
-.movers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-6); }
-@media (max-width: 800px) { .movers { grid-template-columns: minmax(0, 1fr); } }
+/* Movers: one panel. Wide screens show risers and fallers side by side; narrow ones show one with a switch. */
+.movers-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-8); }
+.movers-switch { display: none; }
+@media (max-width: 800px) {
+  .movers-switch { display: flex; width: 100%; margin-bottom: var(--space-3); }
+  .movers-switch button { flex: 1; }
+  .movers-cols { grid-template-columns: minmax(0, 1fr); }
+  .movers-col h3 { display: none; }
+  .movers[data-show="risers"] .movers-col[data-side="fallers"],
+  .movers[data-show="fallers"] .movers-col[data-side="risers"] { display: none; }
+}
 @media (max-width: 640px) { .ranks li { gap: var(--space-2); } }
 
 /* ---------- stats tiles ---------- */
