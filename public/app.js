@@ -524,14 +524,28 @@ const SORTS = {
 };
 const PAGE = 24;
 
+// "Hide unavailable" leaves out players FPL has ruled out (injured, suspended,
+// away, left the club). Doubts stay in. Kept in this browser.
+const HIDE_OUT_KEY = 'footsy100-hide-unavailable';
+const isOut = (p) => !!AVAILABILITY[p.status] && p.status !== 'd';
+function hideOutPref() {
+  try {
+    return localStorage.getItem(HIDE_OUT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function marketTools(m) {
   const prefs = (homePage.prefs ??= { q: '', team: '', pos: '', band: '', sort: 'price-desc' });
+  prefs.hideOut ??= hideOutPref();
   return `<div class="toolbar">
       <input id="q" type="search" placeholder="Search players" aria-label="Search players" value="${esc(prefs.q)}">
       <select id="team" aria-label="Club"><option value="">All clubs</option>${m.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
       <select id="pos" aria-label="Position"><option value="">All positions</option>${Object.entries(POSITIONS).map(([k, v]) => `<option value="${k}" ${k === prefs.pos ? 'selected' : ''}>${v}s</option>`).join('')}</select>
       <select id="band" aria-label="Card colour"><option value="">All cards</option>${BANDS.map((b) => `<option value="${b.key}" ${b.key === prefs.band ? 'selected' : ''}>${b.name}</option>`).join('')}</select>
       <select id="sort" aria-label="Sort">${Object.entries(SORTS).map(([k, s]) => `<option value="${k}" ${k === prefs.sort ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
+      <label class="check"><input id="hide-out" type="checkbox" ${prefs.hideOut ? 'checked' : ''}> Hide unavailable</label>
     </div>
     <div class="list-head"><p class="small muted" id="count"></p>${viewSwitch()}</div>
     <div class="${gridClass()}" id="grid" data-switchable></div>
@@ -551,6 +565,7 @@ function wireMarket(m) {
           (!prefs.team || String(p.team_id) === prefs.team) &&
           (!prefs.pos || p.position === prefs.pos) &&
           (!prefs.band || band(p.price_pence) === prefs.band) &&
+          (!prefs.hideOut || !isOut(p)) &&
           (!q || `${p.first_name} ${p.second_name} ${p.web_name}`.toLowerCase().includes(q)),
       )
       .map((p) => [key(p), p])
@@ -575,6 +590,13 @@ function wireMarket(m) {
   document.getElementById('pos').addEventListener('change', (e) => ((prefs.pos = e.target.value), redo()));
   document.getElementById('band').addEventListener('change', (e) => ((prefs.band = e.target.value), redo()));
   document.getElementById('sort').addEventListener('change', (e) => ((prefs.sort = e.target.value), redo()));
+  document.getElementById('hide-out').addEventListener('change', (e) => {
+    prefs.hideOut = e.target.checked;
+    try {
+      localStorage.setItem(HIDE_OUT_KEY, prefs.hideOut ? '1' : '0');
+    } catch {}
+    redo();
+  });
   document.getElementById('more').addEventListener('click', () => ((limit += PAGE), draw()));
 }
 
