@@ -324,15 +324,9 @@ async function loadPack() {
   if (!el) return;
   const [pk, m] = await Promise.all([api('/pack').catch(() => null), loadMarket()]);
   if (!pk?.event) return void el.remove();
+  // Once this gameweek's pack is opened, the card simply lives in My cards.
+  if (pk.opened) return void el.remove();
   const odds = pk.odds.slice().reverse().map((o) => `${o.percent}% ${BAND_NAMES[o.band]}`).join(' · ');
-  if (pk.opened) {
-    const p = m.playerById[pk.opened.player_id];
-    el.innerHTML = `<div class="pack-slot">${p ? playerCard(p, m, { buy: false }) : ''}</div>
-      <div class="pack-text"><h2>Gameweek ${pk.event} pack</h2>
-      <p>You pulled <b>${esc(pk.opened.web_name)}</b>, a ${BAND_NAMES[pk.opened.band]} card worth ${money(pk.opened.card_price_pence)} when you opened it.</p>
-      <p class="muted small">Your next pack arrives once gameweek ${pk.event}'s matches are settled.</p></div>`;
-    return;
-  }
   el.innerHTML = `<div class="pack-slot"><div class="flip" id="pack-flip"><div class="face back">${cardBack()}</div><div class="face front"></div></div></div>
     <div class="pack-text"><h2>Gameweek ${pk.event} pack</h2>
     <p>One random player card for ${money(pk.price_pence)}. Most packs hold a Bronze, but you could pull a Gold.</p>
@@ -342,18 +336,20 @@ async function loadPack() {
     e.target.disabled = true;
     try {
       const r = await api('/pack/open', { method: 'POST' });
+      // Refresh first so the card's "You own" count includes the pulled card exactly once.
+      await refreshWallet();
       const p = m.playerById[r.player_id];
       const flip = document.getElementById('pack-flip');
       flip.querySelector('.front').innerHTML = p ? playerCard(p, m, { buy: false }) : '';
       flip.classList.add('flipped', `pulled-${r.band}`);
       e.target.remove();
-      await refreshWallet();
       setTimeout(() => {
-        state.owned[r.player_id] = (state.owned[r.player_id] ?? 0) + 1;
         el.querySelector('.pack-text').innerHTML = `<h2>${r.band === 'gold' ? 'Gold!' : `${BAND_NAMES[r.band]} card`}</h2>
           <p>You pulled <b>${esc(p?.web_name ?? 'a new card')}</b>, worth ${money(r.card_price_pence)}. It's in <a href="/portfolio" data-link>My cards</a>.</p>
           <p class="muted small">Your next pack arrives once gameweek ${r.event}'s matches are settled.</p>`;
       }, 700);
+      // On My cards, let the reveal play, then redraw so the card joins your collection and the pack goes.
+      if (location.pathname === '/portfolio') setTimeout(() => location.pathname === '/portfolio' && portfolioPage(), 3000);
     } catch (err) {
       toast(err.message, true);
       e.target.disabled = false;
