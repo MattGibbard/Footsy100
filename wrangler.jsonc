@@ -17,6 +17,7 @@
     }
   ],
   // Sync fixtures/players and settle finished matches every 15 minutes
+  "observability": { "enabled": true },
   "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
     // Resend's shared test sender only delivers to your own Resend account email.
