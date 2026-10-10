@@ -270,6 +270,13 @@ td.rank { font-family: var(--font-display); font-weight: 800; font-size: 20px; c
 .player-layout { display: grid; grid-template-columns: 320px 1fr; gap: var(--space-8); align-items: start; }
 .player-layout .side { display: flex; flex-direction: column; gap: var(--space-5); position: sticky; top: 90px; }
 .player-layout .main > h2:first-child { margin-top: 0; }
+/* Recent matches: what moved the price, line by line */
+.matches { display: flex; flex-direction: column; gap: var(--space-3); }
+.match-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+.match-move { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.breakdown { list-style: none; margin: var(--space-3) 0 0; padding: 0; border-top: 1px solid var(--line-100); }
+.breakdown li { display: grid; grid-template-columns: 1fr auto 80px; gap: var(--space-3); align-items: baseline; padding: var(--space-1) 0; font-variant-numeric: tabular-nums; }
+.breakdown .amt { text-align: right; }
 @media (max-width: 900px) {
   .player-layout { grid-template-columns: 1fr; }
   .player-layout .side { position: static; max-width: 420px; }

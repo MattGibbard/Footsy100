@@ -158,9 +158,14 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
       .all(),
     db
       .prepare(
-        `SELECT s.*, f.kickoff_time, f.team_h, f.team_a, f.team_h_score, f.team_a_score
-         FROM player_match_stats s JOIN fixtures f ON f.id = s.fixture_id
-         WHERE s.player_id = ? ORDER BY f.kickoff_time DESC LIMIT 40`,
+        // Every settled match, including ones he didn't play in, with the stored
+        // per-stat breakdown of his price move (reason) and his stat line if he has one.
+        `SELECT ph.fixture_id, ph.old_price_pence, ph.new_price_pence, ph.reason, COALESCE(s.minutes, 0) AS minutes,
+           s.goals, s.assists, s.clean_sheet, s.goals_conceded, s.own_goals, s.penalties_saved, s.penalties_missed,
+           s.yellow_cards, s.red_cards, s.saves, s.bonus, s.defensive_contribution, f.kickoff_time, f.team_h, f.team_a, f.team_h_score, f.team_a_score
+         FROM price_history ph JOIN fixtures f ON f.id = ph.fixture_id
+         LEFT JOIN player_match_stats s ON s.fixture_id = ph.fixture_id AND s.player_id = ph.player_id
+         WHERE ph.player_id = ? ORDER BY f.kickoff_time DESC LIMIT 40`,
       )
       .bind(id)
       .all(),
