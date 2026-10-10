@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFixtureStats, type FplFixture, type FplLive } from '../src/fpl';
+import { buildFixtureStats, chunkArray, sliceArray, type FplFixture, type FplLive } from '../src/fpl';
 
 // Shapes copied from the live FPL API (fixtures/ and event/{gw}/live/).
 const fixture: FplFixture = {
@@ -48,5 +48,26 @@ describe('buildFixtureStats', () => {
 
   it('drops players who did not play', () => {
     expect(stats.has(2)).toBe(false);
+  });
+});
+
+describe('sliceArray and chunkArray', () => {
+  const doc = JSON.stringify({
+    teams: [{ id: 1, name: 'A "quoted" ]} team' }, { id: 2, name: 'B' }],
+    total_players: 3,
+    elements: [{ id: 1, n: [1, 2] }, { id: 2, n: { x: 'a ] b' } }, { id: 3 }],
+  });
+
+  it('slices arrays without parsing the document', () => {
+    expect(JSON.parse(sliceArray(doc, 'teams'))).toHaveLength(2);
+    expect(JSON.parse(sliceArray(doc, 'elements', true)).map((e: { id: number }) => e.id)).toEqual([1, 2, 3]);
+  });
+
+  it('splits a large array into valid smaller arrays', () => {
+    const arr = JSON.stringify(Array.from({ length: 50 }, (_, i) => ({ id: i, stats: [{ a: [], h: [{ v: i }] }] })));
+    const chunks = chunkArray(arr, 200);
+    expect(chunks.length).toBeGreaterThan(5);
+    expect(chunks.flatMap((c) => JSON.parse(c)).map((x: { id: number }) => x.id)).toEqual([...Array(50).keys()]);
+    expect(chunkArray('[]')).toEqual([]);
   });
 });

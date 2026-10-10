@@ -2,69 +2,27 @@
 // Everything the rest of the app needs goes through the DataProvider shape,
 // so a paid source such as API-Football can be swapped in later.
 
-import type { MatchStats, Position } from './pricing';
+import type { MatchStats } from './pricing';
 
-export interface ProviderTeam {
-  id: number;
-  name: string;
-  short_name: string;
-}
-
-export interface ProviderPlayer {
-  id: number;
-  first_name: string;
-  second_name: string;
-  web_name: string;
-  team_id: number;
-  position: Position;
-  status: string;
-  start_price_pence: number;
-}
-
-export interface ProviderFixture {
-  id: number;
-  event: number | null;
-  team_h: number;
-  team_a: number;
-  kickoff_time: string | null;
-  started: boolean;
-  finished: boolean;
-  team_h_score: number | null;
-  team_a_score: number | null;
-}
-
+// The provider hands back raw JSON text in FPL's shape and the database parses
+// it (json_each), because parsing FPL's ~2MB player file in the Worker blows the
+// free plan's 10ms CPU budget. Another source can be adapted by emitting the
+// same shape.
 export interface DataProvider {
-  getSeasonName(): Promise<string>;
-  getTeamsAndPlayers(): Promise<{ teams: ProviderTeam[]; players: ProviderPlayer[] }>;
-  getFixtures(): Promise<ProviderFixture[]>;
-  // Stat lines for every player who featured in the fixture, keyed by player id.
-  getFixturePlayerStats(fixture: ProviderFixture): Promise<Map<number, MatchStats>>;
+  bootstrapText(): Promise<string>; // FPL /bootstrap-static/
+  fixturesText(): Promise<string>; // FPL /fixtures/
+  gameweekFixturesText(event: number): Promise<string>; // FPL /fixtures/?event=N (small)
+  liveText(event: number): Promise<string>; // FPL /event/N/live/
 }
 
 const BASE = 'https://fantasy.premierleague.com/api';
-const POSITIONS: Record<number, Position> = { 1: 'GKP', 2: 'DEF', 3: 'MID', 4: 'FWD' };
 
-async function getJson<T>(path: string): Promise<T> {
+async function get(path: string): Promise<Response> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'User-Agent': 'Footsy100/0.1 (+https://github.com/MattGibbard/Footsy100)' },
   });
   if (!res.ok) throw new Error(`FPL ${path} returned ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-interface FplBootstrap {
-  events: { id: number; deadline_time: string }[];
-  teams: { id: number; name: string; short_name: string }[];
-  elements: {
-    id: number;
-    first_name: string;
-    second_name: string;
-    web_name: string;
-    team: number;
-    element_type: number;
-    status: string;
-    now_cost: number;
-  }[];
+  return res;
 }
 
 interface FplFixtureStat {
@@ -159,60 +117,64 @@ export function buildFixtureStats(fixture: FplFixture, live: FplLive): Map<numbe
   return out;
 }
 
+// Pulls the array stored under `key` out of a JSON object's text without parsing
+// it. The scan only walks the array itself; pass `isLastKey` for an array that
+// closes the document (FPL's `elements`) to skip even that.
+export function sliceArray(text: string, key: string, isLastKey = false): string {
+  const marker = `"${key}":[`;
+  const start = text.indexOf(marker);
+  if (start < 0) throw new Error(`"${key}" not found in provider data`);
+  const from = start + marker.length - 1;
+  if (isLastKey) {
+    const end = text.lastIndexOf(']');
+    if (end < from || text.slice(end + 1).trim() !== '}') throw new Error(`"${key}" is not the last key`);
+    return text.slice(from, end + 1);
+  }
+  // Walk to the matching bracket, skipping strings.
+  let depth = 0;
+  let inString = false;
+  for (let i = from; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inString) {
+      if (c === 92) i++; // backslash escape
+      else if (c === 34) inString = false;
+    } else if (c === 34) inString = true;
+    else if (c === 91 || c === 123) depth++;
+    else if (c === 93 || c === 125) {
+      if (--depth === 0) return text.slice(from, i + 1);
+    }
+  }
+  throw new Error(`"${key}" array is not terminated`);
+}
+
+// Splits a JSON array's text into smaller JSON arrays (D1 caps a bound value at
+// 2MB). Objects are split at "},{"<first key>": boundaries, which only occur
+// between top-level items because every item starts with the same key.
+export function chunkArray(arrayText: string, maxBytes = 500_000): string[] {
+  const body = arrayText.trim().slice(1, -1);
+  if (!body) return [];
+  const firstKey = body.match(/^\{"([^"]+)":/)?.[1];
+  if (!firstKey || body.length <= maxBytes) return [`[${body}]`];
+  const boundary = `},{"${firstKey}":`;
+  const out: string[] = [];
+  let rest = body;
+  while (rest.length > maxBytes) {
+    let cut = rest.lastIndexOf(boundary, maxBytes);
+    if (cut <= 0) cut = rest.indexOf(boundary, maxBytes);
+    if (cut < 0) break;
+    out.push(`[${rest.slice(0, cut + 1)}]`);
+    rest = rest.slice(cut + 2);
+  }
+  out.push(`[${rest}]`);
+  return out;
+}
+
 export function fplProvider(): DataProvider {
-  let fixturesCache: FplFixture[] | null = null;
-  const liveCache = new Map<number, FplLive>();
-
-  const fixtures = async () => (fixturesCache ??= await getJson<FplFixture[]>('/fixtures/'));
-
+  const text = async (path: string) => (await get(path)).text();
   return {
-    async getSeasonName() {
-      const f = await fixtures();
-      const first = f.map((x) => x.kickoff_time).filter(Boolean).sort()[0];
-      const year = first ? new Date(first).getUTCFullYear() : new Date().getUTCFullYear();
-      return `${year}/${String((year + 1) % 100).padStart(2, '0')}`;
-    },
-
-    async getTeamsAndPlayers() {
-      const b = await getJson<FplBootstrap>('/bootstrap-static/');
-      return {
-        teams: b.teams.map((t) => ({ id: t.id, name: t.name, short_name: t.short_name })),
-        players: b.elements
-          .filter((e) => POSITIONS[e.element_type])
-          .map((e) => ({
-            id: e.id,
-            first_name: e.first_name,
-            second_name: e.second_name,
-            web_name: e.web_name,
-            team_id: e.team,
-            position: POSITIONS[e.element_type],
-            status: e.status,
-            // FPL now_cost is in £0.1m units (55 = £5.5m); we list him at £5.50.
-            start_price_pence: e.now_cost * 10,
-          })),
-      };
-    },
-
-    async getFixtures() {
-      return (await fixtures()).map((f) => ({
-        id: f.id,
-        event: f.event,
-        team_h: f.team_h,
-        team_a: f.team_a,
-        kickoff_time: f.kickoff_time,
-        started: !!f.started,
-        finished: f.finished,
-        team_h_score: f.team_h_score,
-        team_a_score: f.team_a_score,
-      }));
-    },
-
-    async getFixturePlayerStats(pf) {
-      const f = (await fixtures()).find((x) => x.id === pf.id);
-      if (!f || f.event == null) throw new Error(`Fixture ${pf.id} not found in FPL data`);
-      let live = liveCache.get(f.event);
-      if (!live) liveCache.set(f.event, (live = await getJson<FplLive>(`/event/${f.event}/live/`)));
-      return buildFixtureStats(f, live);
-    },
+    bootstrapText: () => text('/bootstrap-static/'),
+    fixturesText: () => text('/fixtures/'),
+    gameweekFixturesText: (event) => text(`/fixtures/?event=${event}`),
+    liveText: (event) => text(`/event/${event}/live/`),
   };
 }

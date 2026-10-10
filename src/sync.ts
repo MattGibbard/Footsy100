@@ -1,10 +1,15 @@
 // Scheduled job: pull teams, players and fixtures from the data provider and
 // settle prices for any match that has finished since the last run.
 
-import type { DataProvider, ProviderFixture } from './fpl';
+import { buildFixtureStats, chunkArray, sliceArray, type DataProvider, type FplFixture, type FplLive } from './fpl';
+import type { MatchStats } from './pricing';
 import { applyChange, scoreMatch, type Position } from './pricing';
 
 const PLAYER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// Settling is the one step that parses JSON in the Worker, so cap it per run.
+const MAX_SETTLEMENTS_PER_RUN = 2;
+
+type Stage = (stage: string) => Promise<void>;
 
 export interface SyncResult {
   season: string;
@@ -14,14 +19,18 @@ export interface SyncResult {
 }
 
 // Runs the sync and records the outcome, so failures are visible at /api/status.
+// Runs the sync and records progress as it goes, so /api/status shows where a
+// run stopped even if Cloudflare kills it outright (which skips any catch).
 export async function runSyncRecorded(db: D1Database, provider: DataProvider, now = new Date()): Promise<SyncResult> {
+  const at = now.toISOString();
+  const stage: Stage = (name) => recordSync(db, { at, ok: false, stage: name, finished: false });
   try {
-    const result = await runSync(db, provider, now);
-    await recordSync(db, { at: now.toISOString(), ok: true, result });
+    const result = await runSync(db, provider, now, stage);
+    await recordSync(db, { at, ok: true, finished: true, result });
     return result;
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
-    await recordSync(db, { at: now.toISOString(), ok: false, error }).catch(() => {});
+    await recordSync(db, { at, ok: false, finished: true, error }).catch(() => {});
     throw e;
   }
 }
@@ -40,30 +49,67 @@ export async function syncStatus(db: D1Database) {
   return { last_sync: last ? JSON.parse(last) : null, players, fixtures, season };
 }
 
-export async function runSync(db: D1Database, provider: DataProvider, now = new Date()): Promise<SyncResult> {
-  const season = await provider.getSeasonName();
+export async function runSync(db: D1Database, provider: DataProvider, now = new Date(), stage: Stage = async () => {}): Promise<SyncResult> {
+  await stage('fetching fixtures');
+  const fixturesText = await provider.fixturesText();
+  await stage('saving fixtures');
+  const fixtures = await syncFixtures(db, fixturesText);
+
+  const firstKickoff = await db.prepare('SELECT MIN(kickoff_time) AS k FROM fixtures').first<string>('k');
+  const season = seasonName(firstKickoff, now);
   await ensureSeason(db, season);
 
   const last = await db.prepare(`SELECT value FROM sync_state WHERE key = 'players_synced_at'`).first<string>('value');
   const playerCount = (await db.prepare('SELECT COUNT(*) AS n FROM players').first<number>('n')) ?? 0;
-  const playersDue = !last || playerCount === 0 || now.getTime() - Date.parse(last) > PLAYER_SYNC_INTERVAL_MS;
-  if (playersDue) await syncTeamsAndPlayers(db, provider, now);
-
-  const fixtures = await provider.getFixtures();
-  await syncFixtures(db, fixtures);
-
-  const due = await db
-    .prepare(`SELECT id FROM fixtures WHERE finished = 1 AND settled_at IS NULL ORDER BY kickoff_time`)
-    .all<{ id: number }>();
-  const settled: number[] = [];
-  for (const { id } of due.results) {
-    const f = fixtures.find((x) => x.id === id);
-    if (!f) continue;
-    await settleFixture(db, provider, f, now);
-    settled.push(id);
+  const resetPrices = (await db.prepare(`SELECT value FROM sync_state WHERE key = 'reset_prices'`).first<string>('value')) === '1';
+  const playersDue = !last || playerCount === 0 || resetPrices || now.getTime() - Date.parse(last) > PLAYER_SYNC_INTERVAL_MS;
+  if (playersDue) {
+    await stage('fetching players');
+    const bootstrap = await provider.bootstrapText();
+    await stage('saving players');
+    await syncTeamsAndPlayers(db, bootstrap, resetPrices, now);
   }
 
-  return { season, playersSynced: playersDue, fixtures: fixtures.length, settled };
+  // First sync of a season: prices start from the provider's current prices, so
+  // matches already played are history, not price moves.
+  if (playerCount === 0 || resetPrices) {
+    await db
+      .prepare('UPDATE fixtures SET settled_at = ? WHERE finished = 1 AND settled_at IS NULL')
+      .bind(sqlTime(now))
+      .run();
+  }
+
+  const due = await db
+    .prepare(
+      `SELECT id, event, team_h, team_a FROM fixtures WHERE finished = 1 AND settled_at IS NULL AND event IS NOT NULL
+       ORDER BY kickoff_time LIMIT ?`,
+    )
+    .bind(MAX_SETTLEMENTS_PER_RUN)
+    .all<DueFixture>();
+  const settled: number[] = [];
+  for (const f of due.results) {
+    await stage(`settling fixture ${f.id}`);
+    await settleFixture(db, provider, f, now);
+    settled.push(f.id);
+  }
+
+  return { season, playersSynced: playersDue, fixtures, settled };
+}
+
+interface DueFixture {
+  id: number;
+  event: number;
+  team_h: number;
+  team_a: number;
+}
+
+const sqlTime = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
+
+// Seasons run August to May and are named after the first kickoff, e.g. '2026/27'.
+export function seasonName(firstKickoff: string | null, now: Date): string {
+  const d = firstKickoff ? new Date(firstKickoff) : now;
+  const year = d.getUTCMonth() < 6 ? d.getUTCFullYear() - 1 : d.getUTCFullYear();
+  return `${year}/${String((year + 1) % 100).padStart(2, '0')}`;
 }
 
 // A new season name (e.g. 2027/28 appearing in the fixture list) deactivates the
@@ -97,57 +143,96 @@ export async function ensureSeason(db: D1Database, name: string): Promise<number
   return newSeason;
 }
 
-async function syncTeamsAndPlayers(db: D1Database, provider: DataProvider, now: Date) {
-  const { teams, players } = await provider.getTeamsAndPlayers();
-  const resetPrices = (await db.prepare(`SELECT value FROM sync_state WHERE key = 'reset_prices'`).first<string>('value')) === '1';
-
-  // Bulk writes go through json_each so a whole squad list is one D1 query
-  // (the free plan allows 50 queries per invocation).
-  await db.batch([
+// Bulk writes hand the provider's JSON text straight to json_each, so the database
+// does the parsing and a whole squad list is one query. That keeps the Worker
+// inside the free plan's 10ms CPU and 50-queries-per-run limits.
+async function syncTeamsAndPlayers(db: D1Database, bootstrap: string, resetPrices: boolean, now: Date) {
+  const stmts = [
     db
       .prepare(
         `INSERT INTO teams (id, name, short_name)
          SELECT j.value ->> 'id', j.value ->> 'name', j.value ->> 'short_name' FROM json_each(?) j WHERE true
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name`,
       )
-      .bind(JSON.stringify(teams)),
-    // New players get the provider's price; existing players keep the market price
-    // unless a new season has started.
-    db
-      .prepare(
-        `INSERT INTO players (id, first_name, second_name, web_name, team_id, position, status, price_pence)
-         SELECT j.value ->> 'id', j.value ->> 'first_name', j.value ->> 'second_name', j.value ->> 'web_name',
-           j.value ->> 'team_id', j.value ->> 'position', j.value ->> 'status', j.value ->> 'start_price_pence'
-         FROM json_each(?) j WHERE true
-         ON CONFLICT(id) DO UPDATE SET first_name = excluded.first_name, second_name = excluded.second_name,
-           web_name = excluded.web_name, team_id = excluded.team_id, position = excluded.position,
-           status = excluded.status
-           ${resetPrices ? ', price_pence = excluded.price_pence, prev_price_pence = NULL' : ''}`,
-      )
-      .bind(JSON.stringify(players)),
+      .bind(sliceArray(bootstrap, 'teams')),
+  ];
+  // New players get FPL's price (now_cost is in £0.1m, so 55 = £5.5m lists at £5.50);
+  // existing players keep the market price unless a new season has started.
+  for (const chunk of chunkArray(sliceArray(bootstrap, 'elements', true))) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT INTO players (id, first_name, second_name, web_name, team_id, position, status, price_pence)
+           SELECT v ->> 'id', v ->> 'first_name', v ->> 'second_name', v ->> 'web_name', v ->> 'team',
+             CASE v ->> 'element_type' WHEN 1 THEN 'GKP' WHEN 2 THEN 'DEF' WHEN 3 THEN 'MID' ELSE 'FWD' END,
+             v ->> 'status', (v ->> 'now_cost') * 10
+           FROM (SELECT j.value AS v FROM json_each(?) j) WHERE (v ->> 'element_type') BETWEEN 1 AND 4
+           ON CONFLICT(id) DO UPDATE SET first_name = excluded.first_name, second_name = excluded.second_name,
+             web_name = excluded.web_name, team_id = excluded.team_id, position = excluded.position,
+             status = excluded.status
+             ${resetPrices ? ', price_pence = excluded.price_pence, prev_price_pence = NULL' : ''}`,
+        )
+        .bind(chunk),
+    );
+  }
+  stmts.push(
     db.prepare(`INSERT OR REPLACE INTO sync_state (key, value) VALUES ('players_synced_at', ?)`).bind(now.toISOString()),
     db.prepare(`DELETE FROM sync_state WHERE key = 'reset_prices'`),
-  ]);
+  );
+  await db.batch(stmts);
 }
 
-async function syncFixtures(db: D1Database, fixtures: ProviderFixture[]) {
-  const rows = fixtures.map((f) => ({ ...f, started: f.started ? 1 : 0, finished: f.finished ? 1 : 0 }));
-  await db
-    .prepare(
-      `INSERT INTO fixtures (id, event, team_h, team_a, kickoff_time, started, finished, team_h_score, team_a_score)
-       SELECT j.value ->> 'id', j.value ->> 'event', j.value ->> 'team_h', j.value ->> 'team_a', j.value ->> 'kickoff_time',
-         j.value ->> 'started', j.value ->> 'finished', j.value ->> 'team_h_score', j.value ->> 'team_a_score'
-       FROM json_each(?) j WHERE true
-       ON CONFLICT(id) DO UPDATE SET event = excluded.event, team_h = excluded.team_h, team_a = excluded.team_a,
-         kickoff_time = excluded.kickoff_time, started = excluded.started, finished = excluded.finished,
-         team_h_score = excluded.team_h_score, team_a_score = excluded.team_a_score`,
-    )
-    .bind(JSON.stringify(rows))
-    .run();
+async function syncFixtures(db: D1Database, fixturesText: string): Promise<number> {
+  const chunks = chunkArray(fixturesText);
+  if (!chunks.length) return 0;
+  await db.batch(
+    chunks.map((chunk) =>
+      db
+        .prepare(
+          `INSERT INTO fixtures (id, event, team_h, team_a, kickoff_time, started, finished, team_h_score, team_a_score)
+           SELECT v ->> 'id', v ->> 'event', v ->> 'team_h', v ->> 'team_a', v ->> 'kickoff_time',
+             COALESCE(v ->> 'started', 0), COALESCE(v ->> 'finished', 0), v ->> 'team_h_score', v ->> 'team_a_score'
+           FROM (SELECT j.value AS v FROM json_each(?) j) WHERE true
+           ON CONFLICT(id) DO UPDATE SET event = excluded.event,
+             -- A fixture id reused for a different match (new season) starts unsettled.
+             settled_at = CASE WHEN excluded.team_h != fixtures.team_h OR excluded.team_a != fixtures.team_a
+               OR (fixtures.finished = 1 AND excluded.finished = 0) THEN NULL ELSE fixtures.settled_at END,
+             team_h = excluded.team_h, team_a = excluded.team_a,
+             kickoff_time = excluded.kickoff_time, started = excluded.started, finished = excluded.finished,
+             team_h_score = excluded.team_h_score, team_a_score = excluded.team_a_score`,
+        )
+        .bind(chunk),
+    ),
+  );
+  return (await db.prepare('SELECT COUNT(*) AS n FROM fixtures').first<number>('n')) ?? 0;
 }
 
-export async function settleFixture(db: D1Database, provider: DataProvider, f: ProviderFixture, now: Date) {
-  const stats = await provider.getFixturePlayerStats(f);
+// One match's stat lines. The gameweek's fixture list is small enough to parse
+// here; the live file covers every player, so the database picks out just the
+// minutes, clean sheets and goals conceded for this fixture.
+async function fixtureStats(db: D1Database, provider: DataProvider, f: DueFixture): Promise<Map<number, MatchStats>> {
+  const fixture = (JSON.parse(await provider.gameweekFixturesText(f.event)) as FplFixture[]).find((x) => x.id === f.id);
+  if (!fixture) throw new Error(`Fixture ${f.id} not found in gameweek ${f.event}`);
+  const elements = sliceArray(await provider.liveText(f.event), 'elements', true);
+  const live: FplLive = { elements: [] };
+  for (const chunk of chunkArray(elements)) {
+    const rows = await db
+      .prepare(
+        `SELECT e.value ->> 'id' AS id, s.value ->> 'identifier' AS identifier, s.value ->> 'value' AS value
+         FROM json_each(?1) e, json_each(e.value, '$.explain') x, json_each(x.value, '$.stats') s
+         WHERE x.value ->> 'fixture' = ?2 AND s.value ->> 'identifier' IN ('minutes', 'clean_sheets', 'goals_conceded')`,
+      )
+      .bind(chunk, f.id)
+      .all<{ id: number; identifier: string; value: number }>();
+    for (const r of rows.results) {
+      live.elements.push({ id: r.id, explain: [{ fixture: f.id, stats: [{ identifier: r.identifier, value: r.value }] }] });
+    }
+  }
+  return buildFixtureStats(fixture, live);
+}
+
+export async function settleFixture(db: D1Database, provider: DataProvider, f: DueFixture, now: Date) {
+  const stats = await fixtureStats(db, provider, f);
   const players = await db
     .prepare('SELECT id, position, price_pence FROM players WHERE team_id IN (?, ?)')
     .bind(f.team_h, f.team_a)

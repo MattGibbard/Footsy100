@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { emptyStats, type DataProvider, type ProviderFixture } from '../src/fpl';
+import { emptyStats, type DataProvider } from '../src/fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues } from '../src/leagues';
 import { buy, listPlayers, portfolio, sell } from '../src/market';
 import type { MatchStats } from '../src/pricing';
@@ -9,41 +9,80 @@ import { createD1 } from './d1shim';
 const HOUR = 3_600_000;
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 19) + 'Z';
 
-function fakeProvider(season = '2026/27') {
-  const fixtures: ProviderFixture[] = [
+interface FakeFixture {
+  id: number;
+  event: number;
+  team_h: number;
+  team_a: number;
+  kickoff_time: string;
+  started: boolean;
+  finished: boolean;
+  team_h_score: number | null;
+  team_a_score: number | null;
+}
+
+// Serves FPL-shaped JSON text, the same shape the real API returns.
+function fakeProvider() {
+  const fixtures: FakeFixture[] = [
     // Arsenal v Chelsea kicks off in 5 hours, Liverpool v Spurs next week.
     { id: 1, event: 8, team_h: 1, team_a: 2, kickoff_time: iso(Date.now() + 5 * HOUR), started: false, finished: false, team_h_score: null, team_a_score: null },
     { id: 2, event: 9, team_h: 3, team_a: 4, kickoff_time: iso(Date.now() + 7 * 24 * HOUR), started: false, finished: false, team_h_score: null, team_a_score: null },
   ];
   const stats = new Map<number, MatchStats>();
-  const provider: DataProvider & { fixtures: ProviderFixture[]; stats: Map<number, MatchStats>; season: string } = {
+  const el = (id: number, first: string, second: string, team: number, type: number, cost: number) => ({
+    can_transact: true, id, first_name: first, second_name: second, web_name: second, team, element_type: type, status: 'a', now_cost: cost,
+  });
+  const provider: DataProvider & { fixtures: FakeFixture[]; stats: Map<number, MatchStats> } = {
     fixtures,
     stats,
-    season,
-    async getSeasonName() {
-      return provider.season;
-    },
-    async getTeamsAndPlayers() {
-      return {
+    async bootstrapText() {
+      return JSON.stringify({
+        events: [{ id: 1, deadline_time: '2026-08-21T17:30:00Z' }],
         teams: [
-          { id: 1, name: 'Arsenal', short_name: 'ARS' },
-          { id: 2, name: 'Chelsea', short_name: 'CHE' },
-          { id: 3, name: 'Liverpool', short_name: 'LIV' },
-          { id: 4, name: 'Spurs', short_name: 'TOT' },
+          { code: 3, id: 1, name: 'Arsenal', short_name: 'ARS' },
+          { code: 8, id: 2, name: 'Chelsea', short_name: 'CHE' },
+          { code: 14, id: 3, name: 'Liverpool', short_name: 'LIV' },
+          { code: 6, id: 4, name: 'Spurs', short_name: 'TOT' },
         ],
-        players: [
-          { id: 100, first_name: 'Bukayo', second_name: 'Saka', web_name: 'Saka', team_id: 1, position: 'MID', status: 'a', start_price_pence: 1000 },
-          { id: 101, first_name: 'David', second_name: 'Raya', web_name: 'Raya', team_id: 1, position: 'GKP', status: 'a', start_price_pence: 550 },
-          { id: 200, first_name: 'Cole', second_name: 'Palmer', web_name: 'Palmer', team_id: 2, position: 'MID', status: 'a', start_price_pence: 1050 },
-          { id: 300, first_name: 'Mohamed', second_name: 'Salah', web_name: 'Salah', team_id: 3, position: 'MID', status: 'a', start_price_pence: 1400 },
+        total_players: 1,
+        element_types: [{ id: 1, singular_name_short: 'GKP' }],
+        elements: [
+          el(100, 'Bukayo', 'Saka', 1, 3, 100),
+          el(101, 'David', 'Raya', 1, 1, 55),
+          el(200, 'Cole', 'Palmer', 2, 3, 105),
+          el(300, 'Mohamed', 'Salah', 3, 3, 140),
+          { ...el(999, 'Mikel', 'Arteta', 1, 5, 15) }, // managers (type 5) are skipped
         ],
-      };
+      });
     },
-    async getFixtures() {
-      return fixtures;
+    async fixturesText() {
+      return JSON.stringify(fixtures.map((f) => ({ code: 1000 + f.id, ...f, stats: [{ identifier: 'goals_scored', a: [], h: [] }] })));
     },
-    async getFixturePlayerStats() {
-      return stats;
+    async gameweekFixturesText(event) {
+      const fs = fixtures.filter((f) => f.event === event);
+      const statLists = (key: keyof MatchStats, id: string) =>
+        fs.map((f) => ({ fixture: f.id, identifier: id, h: [...stats].filter(([p]) => p < 200 || (p >= 300 && p < 400)).map(([p, s]) => ({ element: p, value: s[key] })).filter((r) => r.value), a: [...stats].filter(([p]) => (p >= 200 && p < 300) || p >= 400).map(([p, s]) => ({ element: p, value: s[key] })).filter((r) => r.value) }));
+      const ids: [keyof MatchStats, string][] = [['goals', 'goals_scored'], ['assists', 'assists'], ['yellow_cards', 'yellow_cards'], ['red_cards', 'red_cards'], ['saves', 'saves'], ['bonus', 'bonus'], ['bps', 'bps'], ['own_goals', 'own_goals']];
+      return JSON.stringify(
+        fs.map((f) => ({ code: 1000 + f.id, ...f, stats: ids.map(([k, id]) => { const l = statLists(k, id).find((x) => x.fixture === f.id)!; return { identifier: id, a: l.a, h: l.h }; }) })),
+      );
+    },
+    async liveText(event) {
+      const fixtureIds = fixtures.filter((f) => f.event === event).map((f) => f.id);
+      return JSON.stringify({
+        elements: [...stats].map(([id, s]) => ({
+          id,
+          stats: { minutes: s.minutes },
+          explain: fixtureIds.map((fixture) => ({
+            fixture,
+            stats: [
+              { identifier: 'minutes', points: 2, value: s.minutes, points_modification: 0 },
+              ...(s.clean_sheet ? [{ identifier: 'clean_sheets', points: 4, value: 1, points_modification: 0 }] : []),
+              ...(s.goals_conceded ? [{ identifier: 'goals_conceded', points: -1, value: s.goals_conceded, points_modification: 0 }] : []),
+            ],
+          })),
+        })),
+      });
     },
   };
   return provider;
@@ -135,6 +174,16 @@ describe('trading and settlement', () => {
     expect(board.map((r) => r.rank)).toEqual([1, 2]);
   });
 
+  it('treats matches finished before the first sync as history', async () => {
+    const fresh = createD1();
+    const p = fakeProvider();
+    p.fixtures[0] = { ...p.fixtures[0], kickoff_time: iso(Date.now() - 48 * HOUR), started: true, finished: true, team_h_score: 1, team_a_score: 0 };
+    p.stats.set(100, { ...emptyStats(), minutes: 90, goals: 1 });
+    const res = await runSync(fresh, p);
+    expect(res.settled).toEqual([]);
+    expect((await listPlayers(fresh)).players.find((x) => x.id === 100)?.price_pence).toBe(1000);
+  });
+
   it('runs private leagues', async () => {
     const league = (await createLeague(db, alice, 'Five-a-side lads'))!;
     expect(league.code).toMatch(/^[A-Z2-9]{6}$/);
@@ -154,8 +203,10 @@ describe('trading and settlement', () => {
     await db.prepare('UPDATE players SET price_pence = 2000 WHERE id = 100').run(); // Saka doubles
     await portfolio(db, bob);
 
-    provider.season = '2027/28';
+    // Next season's fixture list arrives: same ids, new matches.
+    provider.fixtures.forEach((f) => (f.kickoff_time = `2027-08-2${f.id}T14:00:00Z`));
     await runSync(db, provider);
+    expect(await db.prepare('SELECT name FROM seasons WHERE active = 1').first('name')).toBe('2027/28');
 
     expect((await portfolio(db, alice)).total_pence).toBe(10_000);
     const prices = Object.fromEntries((await listPlayers(db)).players.map((p) => [p.id, p.price_pence]));
