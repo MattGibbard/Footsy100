@@ -61,7 +61,8 @@
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; background: var(--navy-900); color: var(--ink-100); min-height: 100vh; display: flex; flex-direction: column; }
+/* Backstop: nothing should ever make the page scroll sideways. */
+body { overflow-x: clip; margin: 0; background: var(--navy-900); color: var(--ink-100); min-height: 100vh; display: flex; flex-direction: column; }
 a { color: var(--gold-500); text-decoration: none; }
 a:hover { text-decoration: underline; }
 :focus-visible { outline: 2px solid var(--ink-100); outline-offset: 2px; }
@@ -188,7 +189,7 @@ button.link { background: none; border: 0; color: var(--ink-300); padding: 0; te
 .hero h1 span { color: var(--gold-500); }
 .hero .actions { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-6); }
 .hero .note { color: var(--ink-400); font-size: 13px; margin-top: var(--space-3); }
-.fan { position: relative; height: 520px; }
+.fan { position: relative; height: 520px; overflow-x: clip; }
 .fan .pcard { position: absolute; top: 30px; width: 280px; left: 50%; }
 .fan .pcard:nth-child(1) { transform: translateX(-112%) rotate(-9deg); top: 60px; }
 .fan .pcard:nth-child(2) { transform: translateX(12%) rotate(9deg); top: 60px; }
@@ -242,8 +243,9 @@ button.link { background: none; border: 0; color: var(--ink-300); padding: 0; te
 /* Movers: the photo ring shows the card's band (gold / silver / bronze). */
 .ranks li.rarity .photo { border: 2px solid var(--edge); box-shadow: 0 0 0 2px var(--card); }
 
-.movers { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
-@media (max-width: 800px) { .movers { grid-template-columns: 1fr; } }
+.movers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-6); }
+@media (max-width: 800px) { .movers { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .ranks li { gap: var(--space-2); } }
 
 /* ---------- stats tiles ---------- */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0; }
