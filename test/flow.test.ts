@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { emptyStats, type DataProvider } from '../src/fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues } from '../src/leagues';
-import { buy, getPlayer, listFixtures, listPlayers, portfolio, sell } from '../src/market';
+import { buy, getPlayer, listFixtures, listPlayers, portfolio, sell, topMovers } from '../src/market';
 import type { MatchStats } from '../src/pricing';
 import { runSync } from '../src/sync';
 import { createD1 } from './d1shim';
@@ -181,6 +181,16 @@ describe('trading and settlement', () => {
     // Palmer: +1% app, -2% yellow, +0.05% demand = -0.95%
     expect(prices[200]).toBe(1040);
     expect(prices[300]).toBe(1400); // didn't play yet
+
+    // Risers and fallers rank by % change over the last week.
+    const { movers } = await listPlayers(db);
+    expect(movers.risers[0]).toEqual({ player_id: 100, from_pence: 1000, to_pence: 1201, change: expect.closeTo(0.201) });
+    expect(movers.risers.map((r) => r.player_id)).toContain(101);
+    expect(movers.fallers.map((r) => r.player_id)).toContain(200);
+    expect([...movers.risers, ...movers.fallers].map((r) => r.player_id)).not.toContain(300);
+    const later = await topMovers(db, new Date(Date.now() + 8 * 24 * HOUR));
+    expect(later.risers).toEqual([]);
+    expect(later.fallers).toEqual([]);
 
     // Settled: trading reopens and a re-run doesn't move prices twice.
     expect((await listPlayers(db)).locked_teams).toEqual([]);
