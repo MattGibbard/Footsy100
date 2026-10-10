@@ -23,6 +23,9 @@ The front end follows the PLAYEX Trading Cards design system (night navy, one go
 `scripts/reset-trades.sql` deletes every trade and holding and puts every account back to £100, keeping users, leagues and prices:
 `npx wrangler d1 execute footsy100 --remote --file=scripts/reset-trades.sql`
 
+`scripts/resettle-prices.sql` re-prices every settled match with the current price engine (after a pricing change): prices go back to where they were before the first settled match and the next syncs settle those matches again. Trades and holdings are kept:
+`npx wrangler d1 execute footsy100 --remote --file=scripts/resettle-prices.sql`
+
 ## Local development
 ```sh
 npm install
