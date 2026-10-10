@@ -27,11 +27,14 @@ To pull FPL data locally, add `ADMIN_TOKEN="something"` to `.dev.vars` and run
 `curl -X POST localhost:8787/api/admin/sync -H "Authorization: Bearer something"`.
 
 ## Deploying
-1. `npx wrangler d1 create footsy100` and paste the `database_id` into `wrangler.jsonc`.
-2. `npm run db:migrate:remote`
-3. Set `APP_URL` (e.g. `https://footsy100.<you>.workers.dev`) and `EMAIL_FROM` in `wrangler.jsonc`.
-4. `npx wrangler secret put RESEND_API_KEY` and `npx wrangler secret put ADMIN_TOKEN`
-5. `npm run deploy`, then trigger the first sync with the admin endpoint so players load straight away.
+In Cloudflare's Git build settings, set the deploy command to `npm run deploy`. That deploys the Worker, which creates the `footsy100` D1 database on the first run, and then applies any new migrations.
+
+Then set two secrets in the dashboard (Worker > Settings > Variables and Secrets) or with `npx wrangler secret put`:
+- `RESEND_API_KEY`: from resend.com. Until you verify a domain there, `EMAIL_FROM` stays on Resend's test sender, which only delivers to your own Resend account email.
+- `ADMIN_TOKEN`: any long random string.
+
+Finally, trigger the first data sync so players load straight away:
+`curl -X POST https://footsy100.<you>.workers.dev/api/admin/sync -H "Authorization: Bearer <ADMIN_TOKEN>"`
 
 ## Limits to know about
 - The FPL API is unofficial and undocumented. It can change without notice, and its terms don't cover commercial use. That's fine for a free hobby game, and the provider interface keeps a swap cheap.
