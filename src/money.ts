@@ -1,22 +1,15 @@
-// Money is in pence, shares in micro-shares (1 share = 1,000,000 micro).
+// Money is in pence. Players are bought and sold as whole cards at the current price.
 
-export const MICRO = 1_000_000;
 export const STARTING_CASH_PENCE = 10_000; // £100
 export const SELL_FEE_BP = 200; // 2% fee on sales
-export const MIN_TRADE_PENCE = 10; // 10p
+export const MAX_CARDS_PER_TRADE = 1000;
 
-// Rounds up so the shares are worth at least what was paid; valueOf rounds down,
-// and flooring both made a £10 buy show as £9.99. The extra is under 1 micro-share.
-export function sharesForAmount(amountPence: number, pricePence: number): number {
-  return Math.ceil((amountPence * MICRO) / pricePence);
+export function valueOf(cards: number, pricePence: number): number {
+  return cards * pricePence;
 }
 
-export function valueOf(sharesMicro: number, pricePence: number): number {
-  return Math.floor((sharesMicro * pricePence) / MICRO);
-}
-
-export function saleProceeds(sharesMicro: number, pricePence: number) {
-  const gross = valueOf(sharesMicro, pricePence);
+export function saleProceeds(cards: number, pricePence: number) {
+  const gross = valueOf(cards, pricePence);
   const fee = Math.ceil((gross * SELL_FEE_BP) / 10000);
   return { gross, fee, net: gross - fee };
 }

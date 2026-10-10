@@ -155,7 +155,7 @@ export async function ensureSeason(db: D1Database, name: string): Promise<number
     db.prepare(
       `INSERT OR REPLACE INTO season_results (user_id, season_id, final_value_pence)
        SELECT a.user_id, a.season_id, a.cash_pence + COALESCE(
-         (SELECT SUM(h.shares_micro * p.price_pence / 1000000) FROM holdings h JOIN players p ON p.id = h.player_id
+         (SELECT SUM(h.cards * p.price_pence) FROM holdings h JOIN players p ON p.id = h.player_id
           WHERE h.user_id = a.user_id AND h.season_id = a.season_id), 0)
        FROM accounts a JOIN seasons s ON s.id = a.season_id WHERE s.active = 1`,
     ),
@@ -271,10 +271,10 @@ export async function settleFixture(db: D1Database, provider: DataProvider, f: D
     .bind(f.team_h, f.team_a)
     .all<{ id: number; position: Position; price_pence: number }>();
 
-  // Net buying (buys minus sells) since each player's last price move drives the demand nudge.
+  // Net cards bought (buys minus sells) since each player's last price move drives the demand nudge.
   const flows = await db
     .prepare(
-      `SELECT t.player_id, SUM(CASE t.side WHEN 'buy' THEN t.gross_pence ELSE -t.gross_pence END) AS net
+      `SELECT t.player_id, SUM(CASE t.side WHEN 'buy' THEN t.cards ELSE -t.cards END) AS net
        FROM trades t JOIN players p ON p.id = t.player_id
        WHERE p.team_id IN (?, ?)
          AND t.created_at > COALESCE((SELECT MAX(created_at) FROM price_history ph WHERE ph.player_id = t.player_id), '')

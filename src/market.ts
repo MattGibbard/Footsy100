@@ -1,7 +1,7 @@
 // Reads and trades against the market for the active season.
 
 import { HttpError } from './auth';
-import { MIN_TRADE_PENCE, STARTING_CASH_PENCE, saleProceeds, sharesForAmount, valueOf } from './money';
+import { MAX_CARDS_PER_TRADE, STARTING_CASH_PENCE, saleProceeds, valueOf } from './money';
 
 export const LOCK_BEFORE_KICKOFF_MS = 2 * 60 * 60 * 1000;
 // A match that never gets marked finished (abandoned, data gap) stops locking after this.
@@ -92,7 +92,7 @@ export async function topMovers(db: D1Database, now = new Date()) {
 }
 
 export async function listPlayers(db: D1Database) {
-  const [players, teams, upcoming, locked, movers] = await Promise.all([
+  const [players, teams, upcoming, locked, movers, form] = await Promise.all([
     db
       .prepare(
         `SELECT id, code, web_name, first_name, second_name, team_id, position, status, price_pence, prev_price_pence
@@ -109,6 +109,18 @@ export async function listPlayers(db: D1Database) {
       .all<{ id: number; team_h: number; team_a: number; kickoff_time: string }>(),
     lockedTeams(db),
     topMovers(db),
+    // Each player's price after his last five settled matches, oldest first, for the card's form bars.
+    db
+      .prepare(
+        `SELECT player_id, json_group_array(new_price_pence) AS prices FROM (
+           SELECT player_id, new_price_pence, rn FROM (
+             SELECT player_id, new_price_pence,
+               ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY created_at DESC, id DESC) AS rn
+             FROM price_history)
+           WHERE rn <= 5 ORDER BY player_id, rn DESC)
+         GROUP BY player_id`,
+      )
+      .all<{ player_id: number; prices: string }>(),
   ]);
   const next: Record<number, { fixture_id: number; opponent: number; home: boolean; kickoff_time: string }> = {};
   for (const f of upcoming.results) {
@@ -123,6 +135,8 @@ export async function listPlayers(db: D1Database) {
     team_states: teamStates(locked),
     lock_hours: LOCK_BEFORE_KICKOFF_MS / 3_600_000,
     movers,
+    // Kept as the raw JSON text per player so the Worker doesn't spend CPU parsing it.
+    form: Object.fromEntries(form.results.map((r) => [r.player_id, r.prices])),
   };
 }
 
@@ -165,7 +179,7 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
     const seasonId = await db.prepare('SELECT id FROM seasons WHERE active = 1').first<number>('id');
     if (seasonId) {
       holding = await db
-        .prepare('SELECT shares_micro, cost_pence FROM holdings WHERE user_id = ? AND season_id = ? AND player_id = ? AND shares_micro > 0')
+        .prepare('SELECT cards, cost_pence FROM holdings WHERE user_id = ? AND season_id = ? AND player_id = ? AND cards > 0')
         .bind(userId, seasonId, id)
         .first();
     }
@@ -212,19 +226,19 @@ export async function portfolio(db: D1Database, userId: number) {
     db.prepare('SELECT cash_pence FROM accounts WHERE user_id = ? AND season_id = ?').bind(userId, seasonId).first<number>('cash_pence'),
     db
       .prepare(
-        `SELECT h.player_id, h.shares_micro, h.cost_pence, p.web_name, p.position, p.price_pence, p.prev_price_pence,
+        `SELECT h.player_id, h.cards, h.cost_pence, p.web_name, p.position, p.price_pence, p.prev_price_pence,
            p.team_id, p.code, t.short_name AS team_short, t.code AS team_code
          FROM holdings h JOIN players p ON p.id = h.player_id JOIN teams t ON t.id = p.team_id
-         WHERE h.user_id = ? AND h.season_id = ? AND h.shares_micro > 0
-         ORDER BY h.shares_micro * p.price_pence DESC`,
+         WHERE h.user_id = ? AND h.season_id = ? AND h.cards > 0
+         ORDER BY h.cards * p.price_pence DESC`,
       )
       .bind(userId, seasonId)
-      .all<{ shares_micro: number; price_pence: number; team_id: number }>(),
+      .all<{ cards: number; price_pence: number; team_id: number }>(),
     lockedTeams(db),
   ]);
   const rows = holdings.results.map((h) => ({
     ...h,
-    value_pence: valueOf(h.shares_micro, h.price_pence),
+    value_pence: valueOf(h.cards, h.price_pence),
     match_state: locked.get(h.team_id)?.state ?? null,
   }));
   const invested = rows.reduce((a, h) => a + h.value_pence, 0);
@@ -236,7 +250,7 @@ export async function recentTrades(db: D1Database, userId: number) {
   return (
     await db
       .prepare(
-        `SELECT t.id, t.player_id, p.web_name, t.side, t.shares_micro, t.price_pence, t.gross_pence, t.fee_pence, t.created_at
+        `SELECT t.id, t.player_id, p.web_name, t.side, t.cards, t.price_pence, t.gross_pence, t.fee_pence, t.created_at
          FROM trades t JOIN players p ON p.id = t.player_id
          WHERE t.user_id = ? AND t.season_id = ? ORDER BY t.id DESC LIMIT 100`,
       )
@@ -258,81 +272,84 @@ async function tradablePlayer(db: D1Database, playerId: number) {
   return player;
 }
 
-export async function buy(db: D1Database, userId: number, playerId: number, amountPence: number) {
-  if (!Number.isInteger(amountPence) || amountPence < MIN_TRADE_PENCE) throw new HttpError(400, 'Minimum purchase is 10p');
+function cardCount(n: unknown): number {
+  const cards = Number(n);
+  if (!Number.isInteger(cards) || cards <= 0) throw new HttpError(400, 'Choose a whole number of cards');
+  if (cards > MAX_CARDS_PER_TRADE) throw new HttpError(400, `You can trade up to ${MAX_CARDS_PER_TRADE} cards at once`);
+  return cards;
+}
+
+export async function buy(db: D1Database, userId: number, playerId: number, count: unknown) {
+  const cards = cardCount(count);
   const seasonId = await activeSeasonId(db);
   await ensureAccount(db, userId, seasonId);
   const player = await tradablePlayer(db, playerId);
-  const shares = sharesForAmount(amountPence, player.price_pence);
-  if (shares <= 0) throw new HttpError(400, 'Amount too small');
+  const cost = valueOf(cards, player.price_pence);
 
   try {
     // One transaction: the cash CHECK constraint aborts everything on an overspend.
     await db.batch([
       db
         .prepare('UPDATE accounts SET cash_pence = cash_pence - ? WHERE user_id = ? AND season_id = ?')
-        .bind(amountPence, userId, seasonId),
+        .bind(cost, userId, seasonId),
       db
         .prepare(
-          `INSERT INTO holdings (user_id, season_id, player_id, shares_micro, cost_pence) VALUES (?, ?, ?, ?, ?)
+          `INSERT INTO holdings (user_id, season_id, player_id, cards, cost_pence) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(user_id, season_id, player_id) DO UPDATE SET
-             shares_micro = shares_micro + excluded.shares_micro, cost_pence = cost_pence + excluded.cost_pence`,
+             cards = cards + excluded.cards, cost_pence = cost_pence + excluded.cost_pence`,
         )
-        .bind(userId, seasonId, playerId, shares, amountPence),
+        .bind(userId, seasonId, playerId, cards, cost),
       db
         .prepare(
-          `INSERT INTO trades (user_id, season_id, player_id, side, shares_micro, price_pence, gross_pence, fee_pence)
+          `INSERT INTO trades (user_id, season_id, player_id, side, cards, price_pence, gross_pence, fee_pence)
            VALUES (?, ?, ?, 'buy', ?, ?, ?, 0)`,
         )
-        .bind(userId, seasonId, playerId, shares, player.price_pence, amountPence),
+        .bind(userId, seasonId, playerId, cards, player.price_pence, cost),
     ]);
   } catch (e) {
     if (String(e).includes('CHECK')) throw new HttpError(400, 'Not enough cash');
     throw e;
   }
-  return { side: 'buy', shares_micro: shares, price_pence: player.price_pence, gross_pence: amountPence, fee_pence: 0 };
+  return { side: 'buy', cards, price_pence: player.price_pence, gross_pence: cost, fee_pence: 0 };
 }
 
-// sharesMicro = null sells the whole holding.
-export async function sell(db: D1Database, userId: number, playerId: number, sharesMicro: number | null) {
+// count = null sells every card held.
+export async function sell(db: D1Database, userId: number, playerId: number, count: unknown) {
   const seasonId = await activeSeasonId(db);
   const player = await tradablePlayer(db, playerId);
   const holding = await db
-    .prepare('SELECT shares_micro, cost_pence FROM holdings WHERE user_id = ? AND season_id = ? AND player_id = ?')
+    .prepare('SELECT cards, cost_pence FROM holdings WHERE user_id = ? AND season_id = ? AND player_id = ?')
     .bind(userId, seasonId, playerId)
-    .first<{ shares_micro: number; cost_pence: number }>();
-  if (!holding || holding.shares_micro <= 0) throw new HttpError(400, "You don't own any shares in this player");
+    .first<{ cards: number; cost_pence: number }>();
+  if (!holding || holding.cards <= 0) throw new HttpError(400, "You don't own this card");
 
-  const shares = sharesMicro ?? holding.shares_micro;
-  if (!Number.isInteger(shares) || shares <= 0) throw new HttpError(400, 'Invalid number of shares');
-  if (shares > holding.shares_micro) throw new HttpError(400, "You don't own that many shares");
-  const { gross, fee, net } = saleProceeds(shares, player.price_pence);
-  if (gross < 1) throw new HttpError(400, 'Amount too small');
-  const costReduction = Math.round((holding.cost_pence * shares) / holding.shares_micro);
+  const cards = count == null ? holding.cards : cardCount(count);
+  if (cards > holding.cards) throw new HttpError(400, "You don't own that many cards");
+  const { gross, fee, net } = saleProceeds(cards, player.price_pence);
+  const costReduction = Math.round((holding.cost_pence * cards) / holding.cards);
 
   try {
     // The holdings CHECK constraint aborts the batch if a concurrent sale got there first.
     await db.batch([
       db
         .prepare(
-          `UPDATE holdings SET shares_micro = shares_micro - ?, cost_pence = MAX(0, cost_pence - ?)
+          `UPDATE holdings SET cards = cards - ?, cost_pence = MAX(0, cost_pence - ?)
            WHERE user_id = ? AND season_id = ? AND player_id = ?`,
         )
-        .bind(shares, costReduction, userId, seasonId, playerId),
+        .bind(cards, costReduction, userId, seasonId, playerId),
       db
         .prepare('UPDATE accounts SET cash_pence = cash_pence + ? WHERE user_id = ? AND season_id = ?')
         .bind(net, userId, seasonId),
       db
         .prepare(
-          `INSERT INTO trades (user_id, season_id, player_id, side, shares_micro, price_pence, gross_pence, fee_pence)
+          `INSERT INTO trades (user_id, season_id, player_id, side, cards, price_pence, gross_pence, fee_pence)
            VALUES (?, ?, ?, 'sell', ?, ?, ?, ?)`,
         )
-        .bind(userId, seasonId, playerId, shares, player.price_pence, gross, fee),
+        .bind(userId, seasonId, playerId, cards, player.price_pence, gross, fee),
     ]);
   } catch (e) {
-    if (String(e).includes('CHECK')) throw new HttpError(409, "You don't own that many shares");
+    if (String(e).includes('CHECK')) throw new HttpError(409, "You don't own that many cards");
     throw e;
   }
-  return { side: 'sell', shares_micro: shares, price_pence: player.price_pence, gross_pence: gross, fee_pence: fee, net_pence: net };
+  return { side: 'sell', cards, price_pence: player.price_pence, gross_pence: gross, fee_pence: fee, net_pence: net };
 }
-
