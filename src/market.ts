@@ -167,7 +167,7 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
     db
       .prepare(
         `SELECT id, event, team_h, team_a, kickoff_time, started, finished_provisional FROM fixtures
-         WHERE (team_h = ? OR team_a = ?) AND finished = 0 AND (kickoff_time IS NULL OR kickoff_time > ?)
+         WHERE (team_h = ? OR team_a = ?) AND finished = 0 AND settled_at IS NULL AND (kickoff_time IS NULL OR kickoff_time > ?)
          ORDER BY kickoff_time IS NULL, kickoff_time, id LIMIT 6`,
       )
       .bind(player.team_id, player.team_id, isoSecond(new Date(Date.now() - STALE_FIXTURE_MS)))
