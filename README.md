@@ -39,4 +39,4 @@ Finally, trigger the first data sync so players load straight away:
 ## Limits to know about
 - The FPL API is unofficial and undocumented. It can change without notice, and its terms don't cover commercial use. That's fine for a free hobby game, and the provider interface keeps a swap cheap.
 - The FPL API doesn't expose passes or offsides, so those aren't in the formula yet.
-- Bulk writes use `json_each` so each sync stays within the Workers free plan's per-invocation query limit.
+- The Workers free plan allows 10ms of CPU per run, and parsing FPL's ~2MB player file alone takes longer. So the sync hands FPL's JSON text to D1 (`json_each`) to parse, settles at most 2 matches per run, and records each step at `/api/status` so a stalled run is visible.
