@@ -7,7 +7,7 @@ A footballer card exchange played with fake money. Everyone starts the season wi
 
 ## Game rules
 - New accounts get £100 per season. Players are bought as whole cards at their current price; you can own several of the same card, but not part of one.
-- A card's colour shows its price band: gold from £11.00, silver from £7.50 to £10.99, bronze below £7.50.
+- A card's colour shows its price band: gold from £7.00, silver from £5.00 to £6.99, bronze below £5.00.
 - Starting prices come from FPL prices: a £5.5m FPL player lists at £5.50.
 - Trading on a player locks **2 hours before his team kicks off** and reopens once we settle prices: when FPL marks the match finished, or 2.5 hours after kick-off if FPL has the match at full time (bonus points are in by then, but FPL's final "finished" flag can take until the end of the day).
 - Settlement moves each player's price by the weights in `src/pricing.ts` (goals, assists, clean sheets, cards, saves, bonus, defensive contributions, minutes). A player who doesn't feature drifts down 1%. Net cards bought or sold since his last match add a small nudge (0.1% per 10 cards), capped at ±3%. A single match move is capped at −25% / +40%.
