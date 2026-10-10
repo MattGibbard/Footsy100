@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { emptyStats, type DataProvider } from '../src/fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues } from '../src/leagues';
-import { buy, listPlayers, portfolio, sell } from '../src/market';
+import { buy, getPlayer, listFixtures, listPlayers, portfolio, sell } from '../src/market';
 import type { MatchStats } from '../src/pricing';
 import { runSync } from '../src/sync';
 import { createD1 } from './d1shim';
@@ -112,6 +112,23 @@ describe('trading and settlement', () => {
     expect((await portfolio(db, alice)).cash_pence).toBe(10_000);
     expect(m.next_fixtures[1]).toMatchObject({ opponent: 2, home: true });
     expect(m.locked_teams).toEqual([]);
+  });
+
+  it('lists fixtures and shows a player\'s next matches', async () => {
+    const f = await listFixtures(db);
+    expect(f.fixtures.map((x) => x.id)).toEqual([1, 2]);
+    expect(f.current_event).toBe(8);
+    expect(f.teams).toHaveLength(4);
+
+    const saka = await getPlayer(db, 100, null);
+    expect(saka.upcoming).toEqual([expect.objectContaining({ id: 1, team_h: 1, team_a: 2, event: 8 })]);
+
+    // Once Arsenal v Chelsea is finished it drops off, and gameweek 9 becomes current.
+    provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 2 * HOUR), started: true, finished: true, team_h_score: 1, team_a_score: 0 };
+    await runSync(db, provider);
+    expect((await getPlayer(db, 100, null)).upcoming).toEqual([]);
+    expect((await getPlayer(db, 300, null)).upcoming).toEqual([expect.objectContaining({ id: 2 })]);
+    expect((await listFixtures(db)).current_event).toBe(9);
   });
 
   it('buys fractional shares, blocks overspending and oversells', async () => {

@@ -80,7 +80,7 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
     .bind(id)
     .first<{ team_id: number }>();
   if (!player) throw new HttpError(404, 'Player not found');
-  const [history, matches, locked] = await Promise.all([
+  const [history, matches, upcoming, locked] = await Promise.all([
     db
       .prepare(
         `SELECT fixture_id, old_price_pence, new_price_pence, reason, created_at FROM price_history
@@ -95,6 +95,14 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
          WHERE s.player_id = ? ORDER BY f.kickoff_time DESC LIMIT 40`,
       )
       .bind(id)
+      .all(),
+    db
+      .prepare(
+        `SELECT id, event, team_h, team_a, kickoff_time, started FROM fixtures
+         WHERE (team_h = ? OR team_a = ?) AND finished = 0 AND (kickoff_time IS NULL OR kickoff_time > ?)
+         ORDER BY kickoff_time IS NULL, kickoff_time, id LIMIT 6`,
+      )
+      .bind(player.team_id, player.team_id, isoSecond(new Date(Date.now() - STALE_FIXTURE_MS)))
       .all(),
     lockedTeams(db),
   ]);
@@ -114,7 +122,31 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
     locked_kickoff: locked.get(player.team_id) ?? null,
     history: history.results,
     matches: matches.results,
+    upcoming: upcoming.results,
     holding,
+  };
+}
+
+// Every fixture of the season, for the fixtures page (380 rows, so the browser does the grouping).
+export async function listFixtures(db: D1Database) {
+  const [fixtures, teams, locked] = await Promise.all([
+    db
+      .prepare(
+        `SELECT id, event, team_h, team_a, kickoff_time, started, finished, team_h_score, team_a_score FROM fixtures
+         ORDER BY kickoff_time IS NULL, kickoff_time, id`,
+      )
+      .all<{ event: number | null; finished: number }>(),
+    db.prepare('SELECT id, name, short_name FROM teams ORDER BY name').all(),
+    lockedTeams(db),
+  ]);
+  // The gameweek to open on: the earliest one with a match still to finish.
+  const current = fixtures.results.find((f) => !f.finished && f.event != null)?.event ?? null;
+  return {
+    fixtures: fixtures.results,
+    teams: teams.results,
+    current_event: current,
+    locked_teams: [...locked.keys()],
+    lock_hours: LOCK_BEFORE_KICKOFF_MS / 3_600_000,
   };
 }
 
