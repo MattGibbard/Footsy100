@@ -1,0 +1,39 @@
+# Footsy100
+
+A footballer stock exchange played with fake money. Everyone starts the season with £100, buys shares in Premier League players, and prices move after each match based on how the player performed.
+
+- **Hosting:** one Cloudflare Worker that serves the static front end from `public/` and the API under `/api`, with a D1 database.
+- **Data:** the free (unofficial) Fantasy Premier League API, pulled by a cron trigger every 15 minutes. `src/fpl.ts` sits behind a `DataProvider` interface, so a paid source such as API-Football can replace it later.
+
+## Game rules
+- New accounts get £100 per season. Fractional shares are allowed and the minimum trade is 10p.
+- Starting prices come from FPL prices: a £5.5m FPL player lists at £5.50.
+- Trading on a player locks **2 hours before his team kicks off** and reopens once FPL marks the match finished, which is when bonus points are confirmed and we settle prices.
+- Settlement moves each player's price by the weights in `src/pricing.ts` (goals, assists, clean sheets, cards, saves, bonus, defensive contributions, minutes). A player who doesn't feature drifts down 1%. Net buying or selling since his last match adds a small nudge, capped at ±3%. A single match move is capped at −25% / +40%.
+- Selling costs a 2% fee.
+- Leaderboards rank by total value (cash plus holdings at current prices). When a new season appears in the FPL data, final values are frozen into an all-time table, prices reset to FPL prices, and everyone restarts at £100.
+- Private leagues use a 6-character invite code.
+- Sign-in is by emailed magic link (sent with [Resend](https://resend.com), free up to 3,000 emails a month).
+
+## Local development
+```sh
+npm install
+npm run db:migrate:local
+echo 'DEV_MODE="true"' > .dev.vars   # sign-in links are shown on screen instead of emailed
+npm run dev                          # http://localhost:8787
+npm test
+```
+To pull FPL data locally, add `ADMIN_TOKEN="something"` to `.dev.vars` and run
+`curl -X POST localhost:8787/api/admin/sync -H "Authorization: Bearer something"`.
+
+## Deploying
+1. `npx wrangler d1 create footsy100` and paste the `database_id` into `wrangler.jsonc`.
+2. `npm run db:migrate:remote`
+3. Set `APP_URL` (e.g. `https://footsy100.<you>.workers.dev`) and `EMAIL_FROM` in `wrangler.jsonc`.
+4. `npx wrangler secret put RESEND_API_KEY` and `npx wrangler secret put ADMIN_TOKEN`
+5. `npm run deploy`, then trigger the first sync with the admin endpoint so players load straight away.
+
+## Limits to know about
+- The FPL API is unofficial and undocumented. It can change without notice, and its terms don't cover commercial use. That's fine for a free hobby game, and the provider interface keeps a swap cheap.
+- The FPL API doesn't expose passes or offsides, so those aren't in the formula yet.
+- Bulk writes use `json_each` so each sync stays within the Workers free plan's per-invocation query limit.
