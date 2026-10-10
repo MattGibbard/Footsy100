@@ -236,6 +236,8 @@ button.link { background: none; border: 0; color: var(--ink-300); padding: 0; te
 .ranks li.clickable { cursor: pointer; }
 .ranks li.clickable:hover .who-name { text-decoration: underline; }
 .ranks .empty { padding: var(--space-4) 0; justify-content: center; }
+/* Movers: the photo ring shows the card's band (gold / silver / bronze). */
+.ranks li.rarity .photo { border: 2px solid var(--edge); box-shadow: 0 0 0 2px var(--card); }
 
 .movers { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
 @media (max-width: 800px) { .movers { grid-template-columns: 1fr; } }
