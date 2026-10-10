@@ -235,11 +235,47 @@ function playerCard(p, m, o = {}) {
     <div class="body">
       <h3 class="name"><a href="/player/${p.id}" data-link>${esc(p.web_name)}</a></h3>
       <div><span class="caption">Price · last 5 matches</span>${formBars(form.length ? form : [p.price_pence])}</div>
-      <div class="row">${diff != null ? `<span class="since">${signedMoney(diff)} since full time</span><span class="change ${cls(ch)}">${pctText(ch)}</span>` : '<span class="since">No matches settled yet</span>'}</div>
-      ${o.sell ? `<div class="row"><span class="since">Paid ${money(o.sell.cost)} for ${cardsText(owned)}</span><span class="change ${cls(o.sell.gain)}">${signedMoney(o.sell.gain)}</span></div>${sellRow(p, owned, matchState)}` : o.buy === false ? '' : buyRow(p, matchState, o.compact)}
+      <div class="row move">${diff != null ? `<span class="since">${signedMoney(diff)} since full time</span><span class="change ${cls(ch)}">${pctText(ch)}</span>` : '<span class="since">No matches settled yet</span>'}</div>
+      ${o.sell ? `<div class="row paid"><span class="since">Paid ${money(o.sell.cost)} for ${cardsText(owned)}</span><span class="change ${cls(o.sell.gain)}">${signedMoney(o.sell.gain)}</span></div>${sellRow(p, owned, matchState)}` : o.buy === false ? '' : buyRow(p, matchState, o.compact)}
     </div>
   </article>`;
 }
+
+// ---------- large / small card view ----------
+// One choice for every card list, kept in this browser.
+const VIEW_KEY = 'footsy100-card-view';
+function cardView() {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'small' ? 'small' : 'large';
+  } catch {
+    return 'large';
+  }
+}
+const gridClass = () => `card-grid${cardView() === 'small' ? ' small' : ''}`;
+function viewSwitch() {
+  const v = cardView();
+  return `<div class="seg view-switch" role="group" aria-label="Card size">${[['large', 'Large'], ['small', 'Small']]
+    .map(([k, label]) => `<button type="button" data-view="${k}" class="${v === k ? 'on' : ''}" aria-pressed="${v === k}">${label}</button>`)
+    .join('')}</div>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-view]');
+  if (!b) return;
+  const v = b.dataset.view;
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {}
+  document.querySelectorAll('.view-switch [data-view]').forEach((x) => {
+    x.classList.toggle('on', x.dataset.view === v);
+    x.setAttribute('aria-pressed', x.dataset.view === v);
+  });
+  document.querySelectorAll('.card-grid[data-switchable]').forEach((g) => g.classList.toggle('small', v === 'small'));
+  // Small cards hide the stepper, so go back to one card so the button says what it does.
+  if (v === 'small')
+    document.querySelectorAll('.card-grid[data-switchable] .stepper input').forEach((i) => {
+      if (i.value !== '1') (i.value = '1'), i.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+});
 
 // ---------- trading ----------
 document.addEventListener('click', async (e) => {
@@ -448,8 +484,8 @@ function marketTools(m) {
       <select id="band" aria-label="Card colour"><option value="">All cards</option>${BANDS.map((b) => `<option value="${b.key}" ${b.key === prefs.band ? 'selected' : ''}>${b.name}</option>`).join('')}</select>
       <select id="sort" aria-label="Sort">${Object.entries(SORTS).map(([k, s]) => `<option value="${k}" ${k === prefs.sort ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
     </div>
-    <p class="small muted" id="count"></p>
-    <div class="card-grid" id="grid"></div>
+    <div class="list-head"><p class="small muted" id="count"></p>${viewSwitch()}</div>
+    <div class="${gridClass()}" id="grid" data-switchable></div>
     <div class="more"><button class="btn" id="more" hidden>Show more</button></div>`;
 }
 
@@ -754,8 +790,8 @@ async function portfolioPage() {
     ${
       pf.holdings.length
         ? `<h2>Sell your cards</h2>
-      <p class="small muted">Pick how many to sell. You get the price shown less the ${FEE_BP() / 100}% fee. To buy more of a player, open his card.</p>
-      <div class="card-grid">${pf.holdings
+      <div class="list-head"><p class="small muted">Pick how many to sell. You get the price shown less the ${FEE_BP() / 100}% fee. To buy more of a player, open his card.</p>${viewSwitch()}</div>
+      <div class="${gridClass()}" data-switchable>${pf.holdings
         .map((h) => playerCard(m.playerById[h.player_id] ?? { ...h, id: h.player_id }, m, { sell: { cost: h.cost_pence, gain: h.value_pence - h.cost_pence } }))
         .join('')}</div>
       <h2>Breakdown</h2>
