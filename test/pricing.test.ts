@@ -55,8 +55,16 @@ describe('applyChange', () => {
 describe('money', () => {
   it('buys fractional shares and values them', () => {
     const s = sharesForAmount(1000, 550); // £10 at £5.50
-    expect(s).toBe(1_818_181);
-    expect(valueOf(s, 550)).toBe(999);
+    expect(s).toBe(1_818_182);
+    expect(valueOf(s, 550)).toBe(1000);
+  });
+
+  it('values a fresh purchase at exactly what was paid', () => {
+    for (const price of [11, 101, 300, 550, 777, 1499]) {
+      for (const amount of [10, 99, 1000, 3333, 10_000]) {
+        expect(valueOf(sharesForAmount(amount, price), price)).toBe(amount);
+      }
+    }
   });
 
   it('takes a 2% fee on sales, rounded up', () => {
