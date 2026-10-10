@@ -233,7 +233,7 @@ function upcomingFixtures(list, teamId, teamById) {
     <div class="card next-match">
       <div class="nm-teams"><span class="who">${img('crest', teamById[next.team_h]?.code)}${esc(teamById[next.team_h]?.name)}</span> <span class="muted">v</span> <span class="who">${img('crest', teamById[next.team_a]?.code)}${esc(teamById[next.team_a]?.name)}</span></div>
       <div class="muted">${n.home ? 'Home' : 'Away'} vs ${esc(n.opp?.name)}${next.event ? ` · Gameweek ${next.event}` : ''}</div>
-      <div class="nm-when">${next.started ? '<span class="badge lock">In play</span>' : when(next.kickoff_time)}</div>
+      <div class="nm-when">${next.finished_provisional ? '<span class="badge lock">Full time, waiting for final stats</span>' : next.started ? '<span class="badge lock">In play</span>' : when(next.kickoff_time)}</div>
       ${lockAt && !next.started ? `<div class="small muted">Trading on him locks ${when(lockAt)}</div>` : ''}
     </div>
     ${
@@ -414,14 +414,16 @@ async function fixturesPage() {
     <div id="fx-list"></div>`;
 
   const row = (f) => {
-    const live = f.started && !f.finished;
-    const mid = f.finished || live ? `<b>${f.team_h_score ?? 0} – ${f.team_a_score ?? 0}</b>` : f.kickoff_time ? new Date(f.kickoff_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'TBC';
+    // FPL marks a match finished only once bonus points are confirmed; full time comes first.
+    const ft = f.finished || f.finished_provisional;
+    const live = f.started && !ft;
+    const mid = ft || live ? `<b>${f.team_h_score ?? 0} – ${f.team_a_score ?? 0}</b>` : f.kickoff_time ? new Date(f.kickoff_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'TBC';
     // Locks by team are for trading; only flag the match that is actually causing the lock.
     const lockedNow = !f.finished && f.kickoff_time && new Date(f.kickoff_time).getTime() - Date.now() <= d.lock_hours * 3_600_000 && (locked.has(f.team_h) || locked.has(f.team_a));
     const team = (id, side) => `<a href="/" class="fx-team ${side}" data-team="${id}">${img('crest', teamById[id]?.code)}<span class="hide-sm">${esc(teamById[id]?.name)}</span><span class="show-sm">${esc(teamById[id]?.short_name)}</span></a>`;
     return `<div class="fx-row">
       ${team(f.team_h, 'home')}
-      <div class="fx-mid">${mid}${live ? '<div class="small up">Live</div>' : f.finished ? '<div class="small muted">FT</div>' : lockedNow ? '<div><span class="badge lock">Locked</span></div>' : ''}</div>
+      <div class="fx-mid">${mid}${live ? '<div class="small up">Live</div>' : ft ? '<div class="small muted">FT</div>' : lockedNow ? '<div><span class="badge lock">Locked</span></div>' : ''}</div>
       ${team(f.team_a, 'away')}
     </div>`;
   };
@@ -432,7 +434,7 @@ async function fixturesPage() {
     const teamId = Number(prefs.team);
     let list;
     if (teamId) {
-      list = d.fixtures.filter((f) => !f.finished && (f.team_h === teamId || f.team_a === teamId));
+      list = d.fixtures.filter((f) => !f.finished && !f.finished_provisional && (f.team_h === teamId || f.team_a === teamId));
     } else {
       list = d.fixtures.filter((f) => f.event === prefs.event);
     }
@@ -461,7 +463,7 @@ async function fixturesPage() {
   const liveNow = () =>
     d.fixtures.some((f) => {
       const since = f.kickoff_time ? Date.now() - new Date(f.kickoff_time).getTime() : -1;
-      return !f.finished && since >= 0 && since < 3 * 3_600_000;
+      return !f.finished && !f.finished_provisional && since >= 0 && since < 3 * 3_600_000;
     });
   clearInterval(fixturesPage.timer);
   fixturesPage.timer = setInterval(async () => {

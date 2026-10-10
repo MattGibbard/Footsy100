@@ -129,7 +129,7 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
       .all(),
     db
       .prepare(
-        `SELECT id, event, team_h, team_a, kickoff_time, started FROM fixtures
+        `SELECT id, event, team_h, team_a, kickoff_time, started, finished_provisional FROM fixtures
          WHERE (team_h = ? OR team_a = ?) AND finished = 0 AND (kickoff_time IS NULL OR kickoff_time > ?)
          ORDER BY kickoff_time IS NULL, kickoff_time, id LIMIT 6`,
       )
@@ -163,7 +163,7 @@ export async function listFixtures(db: D1Database) {
   const [fixtures, teams, locked] = await Promise.all([
     db
       .prepare(
-        `SELECT id, event, team_h, team_a, kickoff_time, started, finished, team_h_score, team_a_score FROM fixtures
+        `SELECT id, event, team_h, team_a, kickoff_time, started, finished, finished_provisional, team_h_score, team_a_score FROM fixtures
          ORDER BY kickoff_time IS NULL, kickoff_time, id`,
       )
       .all<{ event: number | null; finished: number }>(),
