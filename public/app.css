@@ -167,6 +167,31 @@ button.link { background: none; border: 0; color: var(--ink-300); padding: 0; te
 .pcard a.cover { color: inherit; }
 .pcard a.cover:hover { text-decoration: none; }
 
+/* Small cards: photo, name, price, colour and one button, so more fit on screen. */
+.list-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.list-head p { margin: 0; min-width: 0; }
+.view-switch { flex: none; height: 38px; }
+.view-switch button { height: 36px; padding: 0 12px; font-size: 14px; }
+.card-grid.small { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--space-3); }
+.card-grid.small .pcard { border-radius: var(--radius-md); }
+.card-grid.small .pcard .head { padding: var(--space-2) var(--space-3); }
+.card-grid.small .pcard .crest-md { width: 22px; height: 22px; }
+.card-grid.small .pcard .id { gap: 6px; }
+.card-grid.small .pcard .pos { font-size: 15px; }
+.card-grid.small .pcard .price { font-size: 20px; }
+.card-grid.small .pcard .portrait { height: 120px; }
+.card-grid.small .pcard .portrait .photo { height: 114px; }
+.card-grid.small .pcard .portrait .photo.img-missing { width: 80px; height: 100px; }
+.card-grid.small .pcard .portrait .tag, .card-grid.small .pcard .portrait .owned { top: 6px; font-size: 11px; padding: 1px 6px; }
+.card-grid.small .pcard .portrait .tag { left: 6px; }
+.card-grid.small .pcard .portrait .owned { right: 6px; }
+.card-grid.small .pcard .body { padding: var(--space-2) var(--space-3) var(--space-3); gap: 6px; }
+.card-grid.small .pcard .name { font-size: 17px; }
+.card-grid.small .pcard .body > div:has(> .bars), .card-grid.small .pcard .since, .card-grid.small .pcard .row.paid,
+.card-grid.small .pcard .stepper, .card-grid.small .pcard .quote, .card-grid.small .pcard .sell-links { display: none; }
+.card-grid.small .pcard .row.move { justify-content: flex-start; font-size: 14px; }
+.card-grid.small .btn-band { height: 38px; font-size: 14px; padding: 0 var(--space-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
 .bars { display: flex; align-items: flex-end; gap: var(--space-1); height: 40px; margin-top: var(--space-1); }
 .bars span { flex: 1; border-radius: var(--radius-bar) var(--radius-bar) 0 0; min-height: 3px; }
 .bars .b-top { background: var(--band-gold-edge); }
@@ -366,6 +391,7 @@ td.rank { font-family: var(--font-display); font-weight: 800; font-size: 20px; c
   .show-sm { display: inline-block; }
   th, td { padding: 8px 10px; }
   .card-grid { grid-template-columns: 1fr; }
+  .card-grid.small { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
   .toolbar input { max-width: none; }
 }
 
