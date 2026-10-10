@@ -116,12 +116,61 @@ function emptyMarketText() {
   return 'Player data hasn\'t loaded yet.';
 }
 
-async function loadMarket(force = false) {
-  // Refetch after a minute so match badges (locked, playing, awaiting price) stay current.
-  if (!state.market || force || Date.now() - state.market.loadedAt > 60_000) {
-    state.market = await api('/players');
-    state.market.loadedAt = Date.now();
+// The last player list is kept in the browser so a refresh can draw it straight away.
+const MARKET_CACHE_KEY = 'footsy100:market';
+const MARKET_CACHE_MAX_AGE_MS = 7 * 24 * 3_600_000;
+let cachedMarketText = null;
+
+function readCachedMarket() {
+  try {
+    const text = localStorage.getItem(MARKET_CACHE_KEY);
+    const c = text && JSON.parse(text);
+    if (!c?.data?.players?.length || Date.now() - c.savedAt > MARKET_CACHE_MAX_AGE_MS) return null;
+    cachedMarketText = JSON.stringify(c.data);
+    return c.data;
+  } catch {
+    return null;
   }
+}
+
+// Saves the raw response and says whether it differs from what was drawn from the cache.
+function saveMarket(data) {
+  const text = JSON.stringify(data);
+  const changed = text !== cachedMarketText;
+  cachedMarketText = text;
+  try {
+    localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), data }));
+  } catch {}
+  return changed;
+}
+
+// One request at a time: callers that arrive while it's in flight share it.
+function fetchMarket() {
+  state.marketReq ??= api('/players')
+    .then((d) => {
+      d.changed = saveMarket(d);
+      d.loadedAt = Date.now();
+      state.market = d;
+      return d;
+    })
+    .finally(() => (state.marketReq = null));
+  return state.marketReq;
+}
+
+async function loadMarket(force = false) {
+  if (!state.market && !force) {
+    // First load of the page: show the list from last time now, and swap in fresh prices when they arrive.
+    const cached = readCachedMarket();
+    if (cached) {
+      state.market = Object.assign(cached, { loadedAt: Date.now(), stale: true });
+      fetchMarket().then(
+        (d) => d.changed && redraw(),
+        () => Object.assign(state.market, { stale: false, loadedAt: 0 }),
+      );
+    }
+  }
+  // Refetch after a minute so match badges (locked, playing, awaiting price) stay current.
+  if (!state.market || force || (!state.market.stale && Date.now() - state.market.loadedAt > 60_000)) await fetchMarket();
   if (!state.market.players.length) state.status = await api('/status').catch(() => null);
   const m = state.market;
   m.teamById = Object.fromEntries(m.teams.map((t) => [t.id, t]));
@@ -1126,8 +1175,19 @@ function rulesPage() {
 }
 
 // ---------- router ----------
-async function route() {
+// When newer data arrives just after a page is drawn, draw it again in place. Skipped
+// once the person has clicked or typed, so nothing they're doing gets wiped.
+let lastInteraction = 0;
+let routedAt = 0;
+for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, () => (lastInteraction = Date.now()), true);
+function redraw() {
+  if (lastInteraction >= routedAt) return;
+  route({ keepScroll: true });
+}
+
+async function route({ keepScroll = false } = {}) {
   const path = location.pathname;
+  routedAt = Date.now();
   document.querySelectorAll('.nav a').forEach((a) => {
     const href = a.getAttribute('href');
     a.classList.toggle('active', href === '/' ? path === '/' || path.startsWith('/player') : path.startsWith(href));
@@ -1150,14 +1210,22 @@ async function route() {
     if (e.status === 401) return needLogin();
     app.innerHTML = `<div class="panel empty">${esc(e.message)}</div>`;
   }
-  window.scrollTo(0, 0);
+  if (!keepScroll) window.scrollTo(0, 0);
 }
 
 (async function start() {
+  // Ask for the player list now, alongside who's signed in, so it's ready when the page draws.
+  loadMarket().catch(() => {});
   const [me, config] = await Promise.all([api('/me').catch(() => ({ user: null })), api('/config')]);
   state.me = me.user;
   state.config = config;
   renderAccount();
-  await refreshWallet();
-  route();
+  // Draw the page without waiting for the wallet. The market is the only page that
+  // takes "You own" tags from it, so redraw that if there are any to add.
+  let walletIn = false;
+  const wallet = refreshWallet().finally(() => (walletIn = true));
+  await route();
+  const drewWithoutWallet = !walletIn;
+  await wallet.catch(() => {});
+  if (drewWithoutWallet && location.pathname === '/' && Object.keys(state.owned).length) redraw();
 })();
