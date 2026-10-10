@@ -119,11 +119,8 @@ app.post('/trade', async (c) => {
   const user = requireUser(c);
   const b = await body(c);
   const playerId = intParam(String(b.player_id));
-  if (b.side === 'buy') return c.json(await buy(c.env.DB, user.id, playerId, Number(b.amount_pence)));
-  if (b.side === 'sell') {
-    const shares = b.shares_micro === 'all' || b.shares_micro == null ? null : Number(b.shares_micro);
-    return c.json(await sell(c.env.DB, user.id, playerId, shares));
-  }
+  if (b.side === 'buy') return c.json(await buy(c.env.DB, user.id, playerId, b.cards));
+  if (b.side === 'sell') return c.json(await sell(c.env.DB, user.id, playerId, b.cards === 'all' || b.cards == null ? null : b.cards));
   throw new HttpError(400, "side must be 'buy' or 'sell'");
 });
 

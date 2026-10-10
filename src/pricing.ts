@@ -38,8 +38,8 @@ export const WEIGHTS = {
   perBonusPoint: 100,
   // FPL's defensive contribution threshold (CBIT/CBIRT) is 10 for defenders, 12 otherwise
   defensiveContribution: 200,
-  // Demand: each £100 of net buying (minus selling) since the last match nudges +0.1%
-  demandPer100Pounds: 10,
+  // Demand: every 10 cards net bought (minus sold) since the last match nudges +0.1%
+  demandPer10Cards: 10,
   demandCap: 300,
   maxRise: 4000,
   maxFall: -2500,
@@ -56,7 +56,7 @@ export function defensiveThreshold(position: Position): number {
   return position === 'DEF' ? 10 : 12;
 }
 
-export function scoreMatch(position: Position, s: MatchStats | null, netFlowPence = 0): PriceChange {
+export function scoreMatch(position: Position, s: MatchStats | null, netCards = 0): PriceChange {
   const b: Record<string, number> = {};
   const add = (k: string, v: number) => {
     if (v !== 0) b[k] = (b[k] ?? 0) + v;
@@ -82,7 +82,7 @@ export function scoreMatch(position: Position, s: MatchStats | null, netFlowPenc
     }
   }
 
-  const demand = Math.trunc((netFlowPence / 10000) * WEIGHTS.demandPer100Pounds);
+  const demand = Math.trunc((netCards / 10) * WEIGHTS.demandPer10Cards);
   add('demand', clamp(demand, -WEIGHTS.demandCap, WEIGHTS.demandCap));
 
   const total = Object.values(b).reduce((a, v) => a + v, 0);

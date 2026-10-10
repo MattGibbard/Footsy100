@@ -134,19 +134,25 @@ describe('trading and settlement', () => {
     expect((await listFixtures(db)).current_event).toBe(9);
   });
 
-  it('buys fractional shares, blocks overspending and oversells', async () => {
-    const r = await buy(db, alice, 100, 2500); // £25 of Saka at £10
-    expect(r.shares_micro).toBe(2_500_000);
-    await expect(buy(db, alice, 300, 8000)).rejects.toThrow('Not enough cash');
+  it('buys whole cards, blocks overspending and oversells', async () => {
+    const r = await buy(db, alice, 100, 2); // 2 Saka cards at £10
+    expect(r).toMatchObject({ cards: 2, gross_pence: 2000 });
+    await expect(buy(db, alice, 300, 6)).rejects.toThrow('Not enough cash'); // 6 × £14 > £80
+    await expect(buy(db, alice, 100, 1.5)).rejects.toThrow('whole number');
+    await expect(buy(db, alice, 100, 0)).rejects.toThrow('whole number');
     const pf = await portfolio(db, alice);
-    expect(pf.cash_pence).toBe(7500);
+    expect(pf.cash_pence).toBe(8000);
     expect(pf.total_pence).toBe(10_000);
-    await expect(sell(db, alice, 100, 3_000_000)).rejects.toThrow("don't own that many");
-    await expect(sell(db, bob, 100, null)).rejects.toThrow("don't own any");
+    expect(pf.holdings[0]).toMatchObject({ cards: 2, value_pence: 2000 });
+    await expect(sell(db, alice, 100, 3)).rejects.toThrow("don't own that many");
+    await expect(sell(db, alice, 100, 0.5)).rejects.toThrow('whole number');
+    await expect(sell(db, bob, 100, null)).rejects.toThrow("don't own this card");
+    expect(await sell(db, alice, 100, 1)).toMatchObject({ cards: 1, gross_pence: 1000 });
+    expect((await portfolio(db, alice)).holdings[0]).toMatchObject({ cards: 1, cost_pence: 1000 });
   });
 
   it('charges 2% on sales', async () => {
-    await buy(db, alice, 100, 1000);
+    await buy(db, alice, 100, 1);
     const r = await sell(db, alice, 100, null);
     expect(r).toMatchObject({ gross_pence: 1000, fee_pence: 20, net_pence: 980 });
     const pf = await portfolio(db, alice);
@@ -155,8 +161,8 @@ describe('trading and settlement', () => {
   });
 
   it('locks trading two hours before kickoff and reopens after settlement', async () => {
-    await buy(db, alice, 100, 5000);
-    await buy(db, bob, 200, 5000);
+    await buy(db, alice, 100, 5);
+    await buy(db, bob, 200, 4);
 
     // Kickoff moves to 90 minutes away: Arsenal and Chelsea players lock.
     provider.fixtures[0].kickoff_time = iso(Date.now() + 1.5 * HOUR);
@@ -164,9 +170,9 @@ describe('trading and settlement', () => {
     expect((await listPlayers(db)).locked_teams.sort()).toEqual([1, 2]);
     expect((await listPlayers(db)).team_states).toEqual({ 1: 'locked', 2: 'locked' });
     expect((await getPlayer(db, 100, null)).match_state).toBe('locked');
-    await expect(buy(db, alice, 100, 100)).rejects.toThrow('locked');
+    await expect(buy(db, alice, 100, 1)).rejects.toThrow('locked');
     await expect(sell(db, alice, 100, null)).rejects.toThrow('locked');
-    await buy(db, alice, 300, 100); // Liverpool still tradable
+    await buy(db, alice, 300, 1); // Liverpool still tradable
 
     // Kicked off: shown as playing, on the market and in portfolios.
     provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 0.5 * HOUR), started: true };
@@ -179,7 +185,7 @@ describe('trading and settlement', () => {
     provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 2 * HOUR), finished_provisional: true };
     await runSync(db, provider);
     expect((await getPlayer(db, 100, null)).match_state).toBe('awaiting');
-    await expect(buy(db, alice, 100, 100)).rejects.toThrow('locked');
+    await expect(buy(db, alice, 100, 1)).rejects.toThrow('locked');
 
     // Match finishes: Saka scores twice, Raya concedes 2, Palmer is booked.
     provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 2 * HOUR), started: true, finished: true, team_h_score: 2, team_a_score: 2 };
@@ -190,13 +196,17 @@ describe('trading and settlement', () => {
     expect(res.settled).toEqual([1]);
 
     const prices = Object.fromEntries((await listPlayers(db)).players.map((p) => [p.id, p.price_pence]));
-    // Saka: +1% app, +16% goals, +3% bonus, +0.05% demand (£50 net bought) = +20.05%
+    // Saka: +1% app, +16% goals, +3% bonus, +0.05% demand (5 cards net bought) = +20.05%
     expect(prices[100]).toBe(1201);
     // Raya: +1% app, -1% conceded, +1% saves = +1%
     expect(prices[101]).toBe(556);
-    // Palmer: +1% app, -2% yellow, +0.05% demand = -0.95%
+    // Palmer: +1% app, -2% yellow, +0.04% demand (4 cards) = -0.96%
     expect(prices[200]).toBe(1040);
     expect(prices[300]).toBe(1400); // didn't play yet
+    // Form bars get each player's price after his recent matches.
+    const { form } = await listPlayers(db);
+    expect(JSON.parse(form[100])).toEqual([1201]);
+    expect(form[300]).toBeUndefined();
 
     // Risers and fallers rank by % change over the last week.
     const { movers } = await listPlayers(db);
@@ -212,7 +222,7 @@ describe('trading and settlement', () => {
     expect((await listPlayers(db)).locked_teams).toEqual([]);
     expect((await runSync(db, provider)).settled).toEqual([]);
     const sale = await sell(db, alice, 100, null);
-    expect(sale.gross_pence).toBe(Math.floor((5_000_000 * 1201) / 1_000_000));
+    expect(sale.gross_pence).toBe(5 * 1201);
 
     const board = await leaderboard(db, 'season');
     expect(board[0].user_id).toBe(alice);
@@ -273,7 +283,7 @@ describe('trading and settlement', () => {
   });
 
   it('resets everyone to £100 for a new season and keeps an all-time table', async () => {
-    await buy(db, alice, 100, 5000);
+    await buy(db, alice, 100, 5);
     await db.prepare('UPDATE players SET price_pence = 2000 WHERE id = 100').run(); // Saka doubles
     await portfolio(db, bob);
 

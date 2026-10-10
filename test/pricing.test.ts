@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyStats } from '../src/fpl';
-import { saleProceeds, sharesForAmount, valueOf } from '../src/money';
+import { saleProceeds, valueOf } from '../src/money';
 import { MIN_PRICE_PENCE, applyChange, scoreMatch } from '../src/pricing';
 
 const line = (o: Partial<ReturnType<typeof emptyStats>>) => ({ ...emptyStats(), ...o });
@@ -28,9 +28,9 @@ describe('scoreMatch', () => {
   });
 
   it('applies a capped demand nudge', () => {
-    expect(scoreMatch('MID', null, 50_000).breakdown.demand).toBe(50); // £500 net bought -> +0.5%
-    expect(scoreMatch('MID', null, 10_000_000).breakdown.demand).toBe(300);
-    expect(scoreMatch('MID', null, -10_000_000).breakdown.demand).toBe(-300);
+    expect(scoreMatch('MID', null, 50).breakdown.demand).toBe(50); // 50 cards net bought -> +0.5%
+    expect(scoreMatch('MID', null, 10_000).breakdown.demand).toBe(300);
+    expect(scoreMatch('MID', null, -10_000).breakdown.demand).toBe(-300);
   });
 
   it('counts defensive contributions against the position threshold', () => {
@@ -53,22 +53,12 @@ describe('applyChange', () => {
 });
 
 describe('money', () => {
-  it('buys fractional shares and values them', () => {
-    const s = sharesForAmount(1000, 550); // £10 at £5.50
-    expect(s).toBe(1_818_182);
-    expect(valueOf(s, 550)).toBe(1000);
-  });
-
-  it('values a fresh purchase at exactly what was paid', () => {
-    for (const price of [11, 101, 300, 550, 777, 1499]) {
-      for (const amount of [10, 99, 1000, 3333, 10_000]) {
-        expect(valueOf(sharesForAmount(amount, price), price)).toBe(amount);
-      }
-    }
+  it('values whole cards at the current price', () => {
+    expect(valueOf(3, 550)).toBe(1650);
   });
 
   it('takes a 2% fee on sales, rounded up', () => {
-    expect(saleProceeds(2_000_000, 550)).toEqual({ gross: 1100, fee: 22, net: 1078 });
-    expect(saleProceeds(1_000_000, 101)).toEqual({ gross: 101, fee: 3, net: 98 });
+    expect(saleProceeds(2, 550)).toEqual({ gross: 1100, fee: 22, net: 1078 });
+    expect(saleProceeds(1, 101)).toEqual({ gross: 101, fee: 3, net: 98 });
   });
 });

@@ -7,7 +7,7 @@ import { STARTING_CASH_PENCE } from './money';
 // Current season value per user: cash plus holdings at today's prices.
 const SEASON_VALUES = `
   SELECT a.user_id, a.cash_pence + COALESCE((
-    SELECT SUM(h.shares_micro * p.price_pence / 1000000) FROM holdings h JOIN players p ON p.id = h.player_id
+    SELECT SUM(h.cards * p.price_pence) FROM holdings h JOIN players p ON p.id = h.player_id
     WHERE h.user_id = a.user_id AND h.season_id = a.season_id), 0) AS total_pence
   FROM accounts a WHERE a.season_id = (SELECT id FROM seasons WHERE active = 1)`;
 
