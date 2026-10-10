@@ -5,8 +5,10 @@ export const STARTING_CASH_PENCE = 10_000; // £100
 export const SELL_FEE_BP = 200; // 2% fee on sales
 export const MIN_TRADE_PENCE = 10; // 10p
 
+// Rounds up so the shares are worth at least what was paid; valueOf rounds down,
+// and flooring both made a £10 buy show as £9.99. The extra is under 1 micro-share.
 export function sharesForAmount(amountPence: number, pricePence: number): number {
-  return Math.floor((amountPence * MICRO) / pricePence);
+  return Math.ceil((amountPence * MICRO) / pricePence);
 }
 
 export function valueOf(sharesMicro: number, pricePence: number): number {

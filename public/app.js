@@ -296,7 +296,7 @@ async function playerPage(id) {
   const buyAmt = document.getElementById('buy-amt');
   buyAmt.addEventListener('input', () => {
     const pence = Math.round(Number(buyAmt.value) * 100);
-    document.getElementById('buy-quote').textContent = pence > 0 ? `≈ ${shares(Math.floor((pence * MICRO) / p.price_pence))} shares at ${money(p.price_pence)}` : '';
+    document.getElementById('buy-quote').textContent = pence > 0 ? `≈ ${shares(Math.ceil((pence * MICRO) / p.price_pence))} shares at ${money(p.price_pence)}` : '';
   });
   document.getElementById('buy').addEventListener('click', () =>
     trade({ player_id: p.id, side: 'buy', amount_pence: Math.round(Number(buyAmt.value) * 100) }, id),
