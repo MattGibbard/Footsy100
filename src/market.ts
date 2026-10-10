@@ -22,23 +22,45 @@ export async function ensureAccount(db: D1Database, userId: number, seasonId: nu
     .run();
 }
 
-// Teams whose players can't be traded: kickoff within 2 hours, or the match is
-// under way / awaiting final stats.
-export async function lockedTeams(db: D1Database, now = new Date()): Promise<Map<number, string>> {
+// Why a team's players can't be traded right now.
+export type MatchState = 'locked' | 'live' | 'awaiting';
+export interface TeamLock {
+  kickoff_time: string;
+  state: MatchState;
+}
+// If a team somehow has two unsettled matches in the window, show the most pressing.
+const STATE_RANK: Record<MatchState, number> = { live: 3, awaiting: 2, locked: 1 };
+
+// Teams whose players can't be traded: kickoff within 2 hours (locked), the match
+// is under way (live), or it's over and prices are waiting to settle (awaiting).
+export async function lockedTeams(db: D1Database, now = new Date()): Promise<Map<number, TeamLock>> {
   const rows = await db
     .prepare(
-      `SELECT team_h, team_a, kickoff_time FROM fixtures
-       WHERE settled_at IS NULL AND kickoff_time IS NOT NULL AND kickoff_time <= ? AND kickoff_time > ?`,
+      `SELECT team_h, team_a, kickoff_time,
+         CASE WHEN finished = 1 OR finished_provisional = 1 THEN 'awaiting'
+              WHEN started = 1 OR kickoff_time <= ?3 THEN 'live'
+              ELSE 'locked' END AS state
+       FROM fixtures
+       WHERE settled_at IS NULL AND kickoff_time IS NOT NULL AND kickoff_time <= ?1 AND kickoff_time > ?2`,
     )
-    .bind(isoSecond(new Date(now.getTime() + LOCK_BEFORE_KICKOFF_MS)), isoSecond(new Date(now.getTime() - STALE_FIXTURE_MS)))
-    .all<{ team_h: number; team_a: number; kickoff_time: string }>();
-  const out = new Map<number, string>();
+    .bind(
+      isoSecond(new Date(now.getTime() + LOCK_BEFORE_KICKOFF_MS)),
+      isoSecond(new Date(now.getTime() - STALE_FIXTURE_MS)),
+      isoSecond(now),
+    )
+    .all<{ team_h: number; team_a: number; kickoff_time: string; state: MatchState }>();
+  const out = new Map<number, TeamLock>();
   for (const r of rows.results) {
-    out.set(r.team_h, r.kickoff_time);
-    out.set(r.team_a, r.kickoff_time);
+    for (const team of [r.team_h, r.team_a]) {
+      const cur = out.get(team);
+      if (!cur || STATE_RANK[r.state] > STATE_RANK[cur.state]) out.set(team, { kickoff_time: r.kickoff_time, state: r.state });
+    }
   }
   return out;
 }
+
+// team id -> match state, for the browser to badge players.
+const teamStates = (locked: Map<number, TeamLock>) => Object.fromEntries([...locked].map(([t, l]) => [t, l.state]));
 
 export const MOVERS_WINDOW_DAYS = 7;
 const MOVERS_LIMIT = 10;
@@ -98,6 +120,7 @@ export async function listPlayers(db: D1Database) {
     teams: teams.results,
     next_fixtures: next,
     locked_teams: [...locked.keys()],
+    team_states: teamStates(locked),
     lock_hours: LOCK_BEFORE_KICKOFF_MS / 3_600_000,
     movers,
   };
@@ -150,7 +173,8 @@ export async function getPlayer(db: D1Database, id: number, userId: number | nul
   return {
     player,
     locked: locked.has(player.team_id),
-    locked_kickoff: locked.get(player.team_id) ?? null,
+    locked_kickoff: locked.get(player.team_id)?.kickoff_time ?? null,
+    match_state: locked.get(player.team_id)?.state ?? null,
     history: history.results,
     matches: matches.results,
     upcoming: upcoming.results,
@@ -184,7 +208,7 @@ export async function listFixtures(db: D1Database) {
 export async function portfolio(db: D1Database, userId: number) {
   const seasonId = await activeSeasonId(db);
   await ensureAccount(db, userId, seasonId);
-  const [account, holdings] = await Promise.all([
+  const [account, holdings, locked] = await Promise.all([
     db.prepare('SELECT cash_pence FROM accounts WHERE user_id = ? AND season_id = ?').bind(userId, seasonId).first<number>('cash_pence'),
     db
       .prepare(
@@ -195,9 +219,14 @@ export async function portfolio(db: D1Database, userId: number) {
          ORDER BY h.shares_micro * p.price_pence DESC`,
       )
       .bind(userId, seasonId)
-      .all<{ shares_micro: number; price_pence: number }>(),
+      .all<{ shares_micro: number; price_pence: number; team_id: number }>(),
+    lockedTeams(db),
   ]);
-  const rows = holdings.results.map((h) => ({ ...h, value_pence: valueOf(h.shares_micro, h.price_pence) }));
+  const rows = holdings.results.map((h) => ({
+    ...h,
+    value_pence: valueOf(h.shares_micro, h.price_pence),
+    match_state: locked.get(h.team_id)?.state ?? null,
+  }));
   const invested = rows.reduce((a, h) => a + h.value_pence, 0);
   return { cash_pence: account ?? 0, holdings_value_pence: invested, total_pence: (account ?? 0) + invested, holdings: rows };
 }
