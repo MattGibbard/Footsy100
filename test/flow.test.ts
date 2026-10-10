@@ -196,26 +196,29 @@ describe('trading and settlement', () => {
     expect(res.settled).toEqual([1]);
 
     const prices = Object.fromEntries((await listPlayers(db)).players.map((p) => [p.id, p.price_pence]));
-    // Saka: +1% app, +16% goals, +3% bonus, +0.05% demand (5 cards net bought) = +20.05%
-    expect(prices[100]).toBe(1201);
-    // Raya: +1% app, -1% conceded, +1% saves = +1%
-    expect(prices[101]).toBe(556);
-    // Palmer: +1% app, -2% yellow, +0.04% demand (4 cards) = -0.96%
-    expect(prices[200]).toBe(1040);
+    // Saka (£10 MID): +16% goals, +3% bonus, -4.88% expected, +0.05% demand (5 cards net bought) = +14.17%
+    expect(prices[100]).toBe(1142);
+    // Raya (£5.50 GKP): -1% conceded, +1% saves, -1.6% expected = -1.6%
+    expect(prices[101]).toBe(541);
+    // Palmer (£10.50 MID): -2% yellow, -5.16% expected, +0.04% demand (4 cards) = -7.12%
+    expect(prices[200]).toBe(975);
     expect(prices[300]).toBe(1400); // didn't play yet
     // The player page lists each settled match with its stat line and per-stat breakdown.
     const [saka] = (await getPlayer(db, 100, null)).matches as Record<string, unknown>[];
-    expect(saka).toMatchObject({ fixture_id: 1, old_price_pence: 1000, new_price_pence: 1201, minutes: 90, goals: 2, bonus: 3 });
-    expect(JSON.parse(saka.reason as string)).toEqual({ appearance: 100, goals: 1600, bonus: 300, demand: 5 });
+    expect(saka).toMatchObject({ fixture_id: 1, old_price_pence: 1000, new_price_pence: 1142, minutes: 90, goals: 2, bonus: 3 });
+    expect(JSON.parse(saka.reason as string)).toEqual({ goals: 1600, bonus: 300, expected: -488, demand: 5 });
+    // First match of the season, so no market adjustment yet; the next one takes off this average.
+    const avg = await db.prepare('SELECT AVG(vs_expected_bp) AS a FROM player_match_stats WHERE minutes > 0').first<number>('a');
+    expect(avg).toBeCloseTo((1412 - 160 - 716) / 3);
     // Form bars get each player's price after his recent matches.
     const { form } = await listPlayers(db);
-    expect(JSON.parse(form[100])).toEqual([1201]);
+    expect(JSON.parse(form[100])).toEqual([1142]);
     expect(form[300]).toBeUndefined();
 
     // Risers and fallers rank by % change over the last week.
     const { movers } = await listPlayers(db);
-    expect(movers.risers[0]).toEqual({ player_id: 100, from_pence: 1000, to_pence: 1201, change: expect.closeTo(0.201) });
-    expect(movers.risers.map((r) => r.player_id)).toContain(101);
+    expect(movers.risers[0]).toEqual({ player_id: 100, from_pence: 1000, to_pence: 1142, change: expect.closeTo(0.142) });
+    expect(movers.fallers.map((r) => r.player_id)).toContain(101);
     expect(movers.fallers.map((r) => r.player_id)).toContain(200);
     expect([...movers.risers, ...movers.fallers].map((r) => r.player_id)).not.toContain(300);
     const later = await topMovers(db, new Date(Date.now() + 8 * 24 * HOUR));
@@ -226,7 +229,7 @@ describe('trading and settlement', () => {
     expect((await listPlayers(db)).locked_teams).toEqual([]);
     expect((await runSync(db, provider)).settled).toEqual([]);
     const sale = await sell(db, alice, 100, null);
-    expect(sale.gross_pence).toBe(5 * 1201);
+    expect(sale.gross_pence).toBe(5 * 1142);
 
     const board = await leaderboard(db, 'season');
     expect(board[0].user_id).toBe(alice);

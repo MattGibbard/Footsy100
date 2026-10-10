@@ -3,7 +3,7 @@
 
 import { buildFixtureStats, chunkArray, sliceArray, type DataProvider, type FplFixture, type FplLive } from './fpl';
 import type { MatchStats } from './pricing';
-import { applyChange, scoreMatch, type Position } from './pricing';
+import { applyChange, marketAdjustment, scoreMatch, type Position } from './pricing';
 
 const PLAYER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // A match counts as live from kick-off until FPL marks it finished (which waits
@@ -284,15 +284,29 @@ export async function settleFixture(db: D1Database, provider: DataProvider, f: D
     .all<{ player_id: number; net: number }>();
   const flowBy = new Map(flows.results.map((r) => [r.player_id, r.net]));
 
+  // How far players have beaten expectations on average this season; each match
+  // takes that back off so the market as a whole doesn't drift up (or down).
+  const average = await db
+    .prepare(
+      `SELECT AVG(s.vs_expected_bp) AS avg FROM player_match_stats s JOIN fixtures f ON f.id = s.fixture_id
+       WHERE f.settled_at IS NOT NULL AND s.minutes > 0`,
+    )
+    .first<number | null>('avg');
+  const marketBp = marketAdjustment(average);
+
   const ts = now.toISOString().replace('T', ' ').slice(0, 19);
   const moves = [];
   const lines = [];
   for (const p of players.results) {
     const s = stats.get(p.id) ?? null;
-    const { changeBp, breakdown } = scoreMatch(p.position, s, flowBy.get(p.id) ?? 0);
+    const { changeBp, breakdown, vsExpectedBp } = scoreMatch(p.position, s, {
+      netCards: flowBy.get(p.id) ?? 0,
+      pricePence: p.price_pence,
+      marketBp,
+    });
     const price = applyChange(p.price_pence, changeBp);
     moves.push({ id: p.id, old: p.price_pence, price, reason: JSON.stringify(breakdown) });
-    if (s) lines.push({ player_id: p.id, ...s, change_bp: changeBp });
+    if (s) lines.push({ player_id: p.id, ...s, change_bp: changeBp, vs_expected_bp: vsExpectedBp });
   }
 
   const movesJson = JSON.stringify(moves);
@@ -316,11 +330,11 @@ export async function settleFixture(db: D1Database, provider: DataProvider, f: D
       .prepare(
         `INSERT OR REPLACE INTO player_match_stats (fixture_id, player_id, minutes, goals, assists, clean_sheet,
            goals_conceded, own_goals, penalties_saved, penalties_missed, yellow_cards, red_cards, saves, bonus, bps,
-           defensive_contribution, change_bp)
+           defensive_contribution, change_bp, vs_expected_bp)
          SELECT ?2, v ->> 'player_id', v ->> 'minutes', v ->> 'goals', v ->> 'assists', v ->> 'clean_sheet',
            v ->> 'goals_conceded', v ->> 'own_goals', v ->> 'penalties_saved', v ->> 'penalties_missed',
            v ->> 'yellow_cards', v ->> 'red_cards', v ->> 'saves', v ->> 'bonus', v ->> 'bps',
-           v ->> 'defensive_contribution', v ->> 'change_bp'
+           v ->> 'defensive_contribution', v ->> 'change_bp', v ->> 'vs_expected_bp'
          FROM (SELECT j.value AS v FROM json_each(?1) j)`,
       )
       .bind(JSON.stringify(lines), f.id),

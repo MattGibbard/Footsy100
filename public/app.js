@@ -498,6 +498,8 @@ function reasonLabel(key, s, bp) {
     case 'own_goals': return n('own_goals') > 1 ? `${n('own_goals')} own goals` : 'Own goal';
     case 'bonus': return n('bonus') ? plural(n('bonus'), 'bonus point') : 'Bonus points';
     case 'defensive_contribution': return n('defensive_contribution') ? `Defensive work (${n('defensive_contribution')} tackles, blocks, etc.)` : 'Defensive work';
+    case 'expected': return 'Expected of a player at his price';
+    case 'market': return bp < 0 ? 'Market adjustment (players are beating expectations)' : 'Market adjustment (players are missing expectations)';
     case 'demand': return bp > 0 ? 'Fans buying his card' : 'Fans selling his card';
     default: return key.replace(/_/g, ' ');
   }
@@ -886,8 +888,6 @@ function rulesPage() {
   const bp = (v) => `${v > 0 ? '+' : ''}${(v / 100).toFixed(1).replace(/\.0$/, '')}%`;
   const byPos = (o) => ['GKP', 'DEF', 'MID', 'FWD'].map((p) => `${p} ${bp(o[p])}`).join(', ');
   const rows = [
-    ['Played 60+ minutes', bp(w.appearance60)],
-    ['Played 1 to 59 minutes', bp(w.appearanceSub)],
     ['Did not play', bp(w.didNotPlay)],
     ['Goal', byPos(w.goal)],
     ['Assist', bp(w.assist)],
@@ -901,6 +901,8 @@ function rulesPage() {
     ['Own goal', bp(w.ownGoal)],
     ['Each FPL bonus point (1 to 3)', bp(w.perBonusPoint)],
     ['Defensive contribution threshold reached', bp(w.defensiveContribution)],
+    ['Expected of him over 90 minutes (taken off every match he plays, less for part of a match)', ['GKP', 'DEF', 'MID', 'FWD'].map((p) => `${p} ${[5, 10].map((pounds) => `£${pounds}: ${bp(-(w.expected[p].base + w.expected[p].perPound * pounds))}`).join(' / ')}`).join(', ')],
+    ['Market adjustment: the season\'s average beat or miss so far, taken back off', `up to ±${(w.marketCap / 100).toFixed(0)}%`],
     ['Demand: every 10 cards net bought since his last match', `${bp(w.demandPer10Cards)} (capped at ±${(w.demandCap / 100).toFixed(0)}%)`],
   ];
   app.innerHTML = `
@@ -911,7 +913,7 @@ function rulesPage() {
         <li>Every Premier League player is a card. Buy cards at the player's current price. You can own several of the same card, but only whole cards.</li>
         <li>A card's colour shows its price band: gold from £7.00, silver from £5.00 to £6.99, bronze under £5.00. Cards change colour as prices move.</li>
         <li>Trading on a player locks <b>2 hours before kick-off</b>.</li>
-        <li>After the final whistle, once the official stats are confirmed, his price moves based on how he played (and a little on how many cards people bought or sold). Then trading reopens.</li>
+        <li>After the final whistle, once the official stats are confirmed, his price moves based on how he played compared with what's expected of a player at his price (and a little on how many cards people bought or sold). An ordinary game leaves his price about where it was, so you profit by backing players before they outperform, not just by holding. Then trading reopens.</li>
         <li>Selling costs a <b>${c.sell_fee_bp / 100}% fee</b>.</li>
         <li>The leaderboard ranks everyone by total value: cash plus cards at today's prices. Everyone restarts with ${money(c.starting_cash_pence)} each season, and the all-time table adds up your profit across seasons.</li>
       </ol>
