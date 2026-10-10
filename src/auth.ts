@@ -32,7 +32,7 @@ export function normaliseEmail(raw: unknown): string | null {
   return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
 }
 
-export async function requestLoginLink(env: Env, email: string): Promise<{ devLink?: string }> {
+export async function requestLoginLink(env: Env, email: string, origin: string): Promise<{ devLink?: string }> {
   const recent = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM login_tokens WHERE email = ? AND created_at > datetime('now', '-1 hour')`,
   )
@@ -47,7 +47,7 @@ export async function requestLoginLink(env: Env, email: string): Promise<{ devLi
 
   // The link opens the app, which then POSTs the token. A plain GET link would be
   // used up by email scanners that prefetch links.
-  const link = `${env.APP_URL.replace(/\/$/, '')}/verify?token=${encodeURIComponent(token)}`;
+  const link = `${(env.APP_URL || origin).replace(/\/$/, '')}/verify?token=${encodeURIComponent(token)}`;
 
   if (env.DEV_MODE === 'true' && !env.RESEND_API_KEY) return { devLink: link };
   if (!env.RESEND_API_KEY) throw new HttpError(500, 'Email sending is not configured');

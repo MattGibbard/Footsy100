@@ -12,16 +12,16 @@
     {
       "binding": "DB",
       "database_name": "footsy100",
-      // Replace with the id printed by `wrangler d1 create footsy100`
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // No database_id: `wrangler deploy` creates the database on first deploy.
       "migrations_dir": "migrations"
     }
   ],
   // Sync fixtures/players and settle finished matches every 15 minutes
   "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
-    "APP_URL": "http://localhost:8787",
-    "EMAIL_FROM": "Footsy100 <login@example.com>",
+    // Resend's shared test sender only delivers to your own Resend account email.
+    // Verify a domain in Resend and change this to send to everyone.
+    "EMAIL_FROM": "Footsy100 <onboarding@resend.dev>",
     "DEV_MODE": "false"
   }
   // Secrets (set with `wrangler secret put`): RESEND_API_KEY, ADMIN_TOKEN

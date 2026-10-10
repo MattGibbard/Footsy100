@@ -60,7 +60,7 @@ const body = async (c: Context<App>) => (await c.req.json().catch(() => ({}))) a
 app.post('/auth/request', async (c) => {
   const email = normaliseEmail((await body(c)).email);
   if (!email) throw new HttpError(400, 'Enter a valid email address');
-  return c.json({ ok: true, ...(await requestLoginLink(c.env, email)) });
+  return c.json({ ok: true, ...(await requestLoginLink(c.env, email, new URL(c.req.url).origin)) });
 });
 
 app.post('/auth/verify', async (c) => {
