@@ -33,6 +33,7 @@
   --band-bronze-button-ink: #1c0f08;
   --rise: #7fe3a8;
   --fall: #ff9a8a;
+  --doubt: #ffc46b;
 
   --font-display: "Saira Condensed", "Arial Narrow", sans-serif;
   --font-body: Saira, system-ui, sans-serif;
@@ -265,6 +266,31 @@ td.rank { font-family: var(--font-display); font-weight: 800; font-size: 20px; c
 .badge.live { color: var(--rise); border-color: var(--rise); }
 .badge.me { color: var(--gold-500); border-color: var(--gold-500); }
 .badge.flag { color: var(--fall); border-color: var(--fall); }
+.badge.flag.doubt { color: var(--doubt); border-color: var(--doubt); }
+.news { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: baseline; padding: var(--space-2) var(--space-3); border-radius: 10px; border: 1px solid var(--fall); background: var(--navy-800); }
+.news.doubt { border-color: var(--doubt); }
+.chart-note { margin: var(--space-1) 0 0; }
+.chart-panel { margin-bottom: var(--space-6); }
+
+/* ---------- weekly pack ---------- */
+.pack { display: grid; grid-template-columns: 200px 1fr; gap: var(--space-6); align-items: center; margin: var(--space-6) 0; }
+.pack h2 { margin-top: 0; }
+.pack-slot .pcard .buy-row { display: none; }
+.flip { position: relative; perspective: 1000px; min-height: 290px; }
+.flip .face { backface-visibility: hidden; transition: transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.flip .back { position: absolute; inset: 0; }
+.flip .front { transform: rotateY(180deg); }
+.flip.flipped .back { transform: rotateY(-180deg); }
+.flip.flipped .front { transform: rotateY(0); }
+.card-back { height: 100%; min-height: 290px; border-radius: var(--radius-lg); border: 2px solid var(--gold-700); color: var(--gold-500);
+  background: repeating-linear-gradient(45deg, var(--navy-800) 0 10px, var(--navy-700) 10px 20px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2);
+  font-family: var(--font-display); font-weight: 800; letter-spacing: 0.08em; }
+.card-back svg { width: 64px; height: 64px; }
+.flip.pulled-gold .front .pcard { animation: shimmer 1.4s ease-out 0.5s 2; }
+@keyframes shimmer { 0%, 100% { box-shadow: 0 0 0 rgba(242, 195, 91, 0); } 50% { box-shadow: 0 0 28px rgba(242, 195, 91, 0.75); } }
+@media (prefers-reduced-motion: reduce) { .flip .face { transition: none; } .flip.pulled-gold .front .pcard { animation: none; } }
+@media (max-width: 640px) { .pack { grid-template-columns: 1fr; } .pack-slot { max-width: 220px; margin: 0 auto; } }
 
 /* ---------- player page ---------- */
 .player-layout { display: grid; grid-template-columns: 320px 1fr; gap: var(--space-8); align-items: start; }

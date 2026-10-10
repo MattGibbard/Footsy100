@@ -16,6 +16,7 @@ import { fplProvider } from './fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues, type Scope } from './leagues';
 import { activeSeasonId, buy, ensureAccount, getPlayer, listFixtures, listPlayers, portfolio, recentTrades, sell } from './market';
 import { SELL_FEE_BP, STARTING_CASH_PENCE } from './money';
+import { PACK_ODDS, PACK_PRICE_PENCE, openPack, packStatus } from './packs';
 import { WEIGHTS } from './pricing';
 import { runLiveScores, runSyncRecorded, syncStatus } from './sync';
 
@@ -102,7 +103,13 @@ app.post('/me', async (c) => {
 
 // --- market ---
 app.get('/config', (c) =>
-  c.json({ starting_cash_pence: STARTING_CASH_PENCE, sell_fee_bp: SELL_FEE_BP, weights: WEIGHTS }),
+  c.json({
+    starting_cash_pence: STARTING_CASH_PENCE,
+    sell_fee_bp: SELL_FEE_BP,
+    weights: WEIGHTS,
+    pack_price_pence: PACK_PRICE_PENCE,
+    pack_odds: PACK_ODDS.map(({ band, percent }) => ({ band, percent })),
+  }),
 );
 
 app.get('/players', async (c) => c.json(await listPlayers(c.env.DB)));
@@ -123,6 +130,10 @@ app.post('/trade', async (c) => {
   if (b.side === 'sell') return c.json(await sell(c.env.DB, user.id, playerId, b.cards === 'all' || b.cards == null ? null : b.cards));
   throw new HttpError(400, "side must be 'buy' or 'sell'");
 });
+
+// --- weekly packs ---
+app.get('/pack', async (c) => c.json(await packStatus(c.env.DB, requireUser(c).id)));
+app.post('/pack/open', async (c) => c.json(await openPack(c.env.DB, requireUser(c).id)));
 
 // --- leaderboards & leagues ---
 app.get('/leaderboard', async (c) => {

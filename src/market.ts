@@ -95,7 +95,7 @@ export async function listPlayers(db: D1Database) {
   const [players, teams, upcoming, locked, movers, form] = await Promise.all([
     db
       .prepare(
-        `SELECT id, code, web_name, first_name, second_name, team_id, position, status, price_pence, prev_price_pence
+        `SELECT id, code, web_name, first_name, second_name, team_id, position, status, news, chance_next, price_pence, prev_price_pence
          FROM players ORDER BY price_pence DESC`,
       )
       .all(),
@@ -227,11 +227,11 @@ export async function listFixtures(db: D1Database) {
 export async function portfolio(db: D1Database, userId: number) {
   const seasonId = await activeSeasonId(db);
   await ensureAccount(db, userId, seasonId);
-  const [account, holdings, locked] = await Promise.all([
+  const [account, holdings, locked, history] = await Promise.all([
     db.prepare('SELECT cash_pence FROM accounts WHERE user_id = ? AND season_id = ?').bind(userId, seasonId).first<number>('cash_pence'),
     db
       .prepare(
-        `SELECT h.player_id, h.cards, h.cost_pence, p.web_name, p.position, p.price_pence, p.prev_price_pence,
+        `SELECT h.player_id, h.cards, h.cost_pence, p.web_name, p.position, p.status, p.news, p.chance_next, p.price_pence, p.prev_price_pence,
            p.team_id, p.code, t.short_name AS team_short, t.code AS team_code
          FROM holdings h JOIN players p ON p.id = h.player_id JOIN teams t ON t.id = p.team_id
          WHERE h.user_id = ? AND h.season_id = ? AND h.cards > 0
@@ -240,6 +240,10 @@ export async function portfolio(db: D1Database, userId: number) {
       .bind(userId, seasonId)
       .all<{ cards: number; price_pence: number; team_id: number }>(),
     lockedTeams(db),
+    db
+      .prepare('SELECT day, value_pence FROM portfolio_snapshots WHERE user_id = ? AND season_id = ? ORDER BY day')
+      .bind(userId, seasonId)
+      .all<{ day: string; value_pence: number }>(),
   ]);
   const rows = holdings.results.map((h) => ({
     ...h,
@@ -247,7 +251,14 @@ export async function portfolio(db: D1Database, userId: number) {
     match_state: locked.get(h.team_id)?.state ?? null,
   }));
   const invested = rows.reduce((a, h) => a + h.value_pence, 0);
-  return { cash_pence: account ?? 0, holdings_value_pence: invested, total_pence: (account ?? 0) + invested, holdings: rows };
+  return {
+    cash_pence: account ?? 0,
+    holdings_value_pence: invested,
+    total_pence: (account ?? 0) + invested,
+    holdings: rows,
+    // Daily total value, oldest first, for the chart (today's live value is total_pence).
+    history: history.results,
+  };
 }
 
 export async function recentTrades(db: D1Database, userId: number) {

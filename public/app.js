@@ -158,6 +158,25 @@ function matchBadge(s) {
 // FPL availability flags.
 const AVAILABILITY = { d: 'Doubtful', i: 'Injured', s: 'Suspended', u: 'Unavailable', n: 'Not in squad' };
 
+// FPL's injury and availability news as a badge: amber for a doubt (with his
+// chance of playing when FPL gives one), red when he's out. Hover shows the news.
+function availabilityBadge(p) {
+  const label = AVAILABILITY[p.status];
+  if (!label) return '';
+  const doubt = p.status === 'd';
+  const text = doubt && p.chance_next != null ? `${p.chance_next}% to play` : label;
+  return `<span class="badge flag${doubt ? ' doubt' : ''}" title="${esc(p.news || label)}">${text}</span>`;
+}
+
+// The full news line for a player page.
+function availabilityNote(p) {
+  if (!AVAILABILITY[p.status]) return '';
+  // FPL's news usually states the chance already ("Knock - 75% chance of playing").
+  const chance = p.chance_next != null && !String(p.news).includes('%') ? ` · ${p.chance_next}% chance of playing next round` : '';
+  const updated = p.news_added ? ` <span class="muted">Updated ${when(p.news_added)}</span>` : '';
+  return `<p class="news ${p.status === 'd' ? 'doubt' : 'out'}">${availabilityBadge(p)} ${esc(p.news || AVAILABILITY[p.status])}${chance}.${updated}</p>`;
+}
+
 function renderAccount() {
   const el = document.getElementById('account');
   el.innerHTML = state.me
@@ -200,8 +219,7 @@ function playerCard(p, m, o = {}) {
   const matchState = m.teamState[p.team_id];
   const form = m.form[p.id] ? JSON.parse(m.form[p.id]) : [];
   const owned = state.owned[p.id];
-  const flag = AVAILABILITY[p.status];
-  const tag = matchState ? matchBadge(matchState) : flag ? `<span class="badge flag" title="FPL availability flag">${flag}</span>` : '';
+  const tag = matchState ? matchBadge(matchState) : availabilityBadge(p);
   return `<article class="pcard band-${band(p.price_pence)}${o.featured ? ' featured' : ''}" data-card="${p.id}">
     <div class="head"><div class="id">${img('crest', team?.code, 'md', `${team?.name ?? 'Club'} crest`)}<span class="pos" title="${POSITIONS[p.position] ?? ''}">${p.position}</span></div><span class="price">${money(p.price_pence)}</span></div>
     <a class="cover portrait" href="/player/${p.id}" data-link tabindex="-1">${img('photo', p.code, 'card', `Photo of ${p.web_name}`)}${tag ? `<span class="tag">${tag}</span>` : ''}${owned ? `<span class="owned badge me">You own ${owned}</span>` : ''}</a>
@@ -279,6 +297,59 @@ document.addEventListener('input', (e) => {
   }
 });
 
+// ---------- weekly pack ----------
+const BAND_NAMES = { gold: 'Gold', silver: 'Silver', bronze: 'Bronze' };
+const cardBack = () => `<div class="card-back" aria-hidden="true"><svg viewBox="0 0 34 34"><polygon points="17,2 31,10 31,24 17,32 3,24 3,10" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M13 23V11h8.5M13 17h6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>FOOTSY<b>100</b></span></div>`;
+
+// A placeholder that fills itself in, so pages don't wait on the pack to render.
+function packSection() {
+  if (!state.me) return '';
+  queueMicrotask(loadPack);
+  return '<section class="panel pack" id="pack" aria-live="polite"><p class="muted small">Loading your weekly pack…</p></section>';
+}
+
+async function loadPack() {
+  const el = document.getElementById('pack');
+  if (!el) return;
+  const [pk, m] = await Promise.all([api('/pack').catch(() => null), loadMarket()]);
+  if (!pk?.event) return void el.remove();
+  const odds = pk.odds.slice().reverse().map((o) => `${o.percent}% ${BAND_NAMES[o.band]}`).join(' · ');
+  if (pk.opened) {
+    const p = m.playerById[pk.opened.player_id];
+    el.innerHTML = `<div class="pack-slot">${p ? playerCard(p, m, { buy: false }) : ''}</div>
+      <div class="pack-text"><h2>Gameweek ${pk.event} pack</h2>
+      <p>You pulled <b>${esc(pk.opened.web_name)}</b>, a ${BAND_NAMES[pk.opened.band]} card worth ${money(pk.opened.card_price_pence)} when you opened it.</p>
+      <p class="muted small">Your next pack arrives once gameweek ${pk.event}'s matches are settled.</p></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="pack-slot"><div class="flip" id="pack-flip"><div class="face back">${cardBack()}</div><div class="face front"></div></div></div>
+    <div class="pack-text"><h2>Gameweek ${pk.event} pack</h2>
+    <p>One random player card for ${money(pk.price_pence)}. Most packs hold a Bronze, but you could pull a Gold.</p>
+    <p class="muted small">${odds}. One pack per gameweek. The card is yours to keep or sell like any other.</p>
+    <button class="btn primary" id="open-pack">Open pack for ${money(pk.price_pence)}</button></div>`;
+  document.getElementById('open-pack').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await api('/pack/open', { method: 'POST' });
+      const p = m.playerById[r.player_id];
+      const flip = document.getElementById('pack-flip');
+      flip.querySelector('.front').innerHTML = p ? playerCard(p, m, { buy: false }) : '';
+      flip.classList.add('flipped', `pulled-${r.band}`);
+      e.target.remove();
+      await refreshWallet();
+      setTimeout(() => {
+        state.owned[r.player_id] = (state.owned[r.player_id] ?? 0) + 1;
+        el.querySelector('.pack-text').innerHTML = `<h2>${r.band === 'gold' ? 'Gold!' : `${BAND_NAMES[r.band]} card`}</h2>
+          <p>You pulled <b>${esc(p?.web_name ?? 'a new card')}</b>, worth ${money(r.card_price_pence)}. It's in <a href="/portfolio" data-link>My cards</a>.</p>
+          <p class="muted small">Your next pack arrives once gameweek ${r.event}'s matches are settled.</p>`;
+      }, 700);
+    } catch (err) {
+      toast(err.message, true);
+      e.target.disabled = false;
+    }
+  });
+}
+
 // ---------- pages ----------
 async function homePage() {
   const m = await loadMarket();
@@ -286,6 +357,7 @@ async function homePage() {
     app.innerHTML = `
       <h1>The market</h1>
       <p class="intro">Buy whole cards at today's price. Trading on a player locks ${m.lock_hours} hours before his team kicks off and reopens once the match is settled.</p>
+      ${packSection()}
       ${bandKey()}
       ${m.players.length ? moversSection(m) : ''}
       <h2>All players</h2>
@@ -437,14 +509,14 @@ document.addEventListener('click', (e) => {
   if (li) navigate(`/player/${li.dataset.player}`);
 });
 
-function sparkline(points) {
-  if (points.length < 2) return '<p class="muted small" style="margin:0">Price history appears after his first settled match.</p>';
+function sparkline(points, empty = 'Price history appears after his first settled match.', label = 'Price history') {
+  if (points.length < 2) return `<p class="muted small" style="margin:0">${empty}</p>`;
   const w = 600, h = 140, pad = 6;
   const min = Math.min(...points), max = Math.max(...points);
   const span = max - min || 1;
   const xy = points.map((v, i) => [pad + (i * (w - 2 * pad)) / (points.length - 1), h - pad - ((v - min) * (h - 2 * pad)) / span]);
   const line = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join('');
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Price history from ${money(points[0])} to ${money(points[points.length - 1])}">
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${label} from ${money(points[0])} to ${money(points[points.length - 1])}">
     <path class="area" d="${line}L${w - pad},${h}L${pad},${h}Z"/><path class="line" d="${line}"/></svg>`;
 }
 
@@ -592,6 +664,7 @@ async function playerPage(id) {
         <h1 style="margin-top:0">${esc(p.first_name)} ${esc(p.second_name)}</h1>
         <p class="muted who">${img('crest', p.team_code, 'md')}${esc(p.team_name)} · ${POSITIONS[p.position] ?? p.position}</p>
         ${d.match_state ? `<p>${matchBadge(d.match_state)}</p>` : ''}
+        ${availabilityNote(p)}
         <div class="stats">
           <div class="stat"><div class="label">Price</div><div class="value">${money(p.price_pence)}</div></div>
           <div class="stat"><div class="label">Since full time</div><div class="value ${cls(ch)}">${p.prev_price_pence ? pctText(ch) : '–'}</div>${p.prev_price_pence ? `<div class="small muted">${signedMoney(p.price_pence - p.prev_price_pence)}</div>` : ''}</div>
@@ -658,11 +731,19 @@ async function portfolioPage() {
   const profit = pf.total_pence - (state.config?.starting_cash_pence ?? 10000);
   app.innerHTML = `
     <h1>My cards</h1>
+    ${packSection()}
     <div class="stats">
       <div class="stat"><div class="label">Total value</div><div class="value">${money(pf.total_pence)}</div><div class="small ${cls(profit)}">${signedMoney(profit)} this season</div></div>
       <div class="stat"><div class="label">Cash</div><div class="value">${money(pf.cash_pence)}</div></div>
       <div class="stat"><div class="label">Cards</div><div class="value">${money(pf.holdings_value_pence)}</div><div class="small muted">${cardsText(pf.holdings.reduce((a, h) => a + h.cards, 0))}</div></div>
     </div>
+    <h2>Value over time</h2>
+    <div class="panel tight chart-panel">${sparkline(
+      // Everyone starts on the same budget; then one point a day, then right now.
+      [state.config?.starting_cash_pence ?? 10000, ...pf.history.map((d) => d.value_pence), pf.total_pence],
+      '',
+      'Total value',
+    )}<p class="small muted chart-note">From your ${money(state.config?.starting_cash_pence ?? 10000)} start to now, with a point added each day.</p></div>
     ${
       pf.holdings.length
         ? `<div class="card-grid">${pf.holdings.map((h) => playerCard(m.playerById[h.player_id] ?? { ...h, id: h.player_id }, m)).join('')}</div>
@@ -672,7 +753,7 @@ async function portfolioPage() {
         .map((h) => {
           const gain = h.value_pence - h.cost_pence;
           return `<tr class="clickable" data-href="/player/${h.player_id}">
-            <td><span class="who">${img('photo', h.code)}<span><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span>${h.match_state ? ' ' + matchBadge(h.match_state) : ''}</span></span></td>
+            <td><span class="who">${img('photo', h.code)}<span><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span>${h.match_state ? ' ' + matchBadge(h.match_state) : ' ' + availabilityBadge(h)}</span></span></td>
             <td class="num">${h.cards}</td><td class="num">${money(h.price_pence)}</td>
             <td class="num">${money(h.value_pence)}</td><td class="num ${cls(gain)}">${signedMoney(gain)}</td></tr>`;
         })
@@ -948,6 +1029,7 @@ function rulesPage() {
         <li>A card's colour shows its price band: gold from £7.00, silver from £5.00 to £6.99, bronze under £5.00. Cards change colour as prices move.</li>
         <li>Trading on a player locks <b>2 hours before kick-off</b>. Once the official stats are confirmed after the final whistle, his price moves (see below) and trading reopens.</li>
         <li>Selling costs a <b>${c.sell_fee_bp / 100}% fee</b>.</li>
+        <li>Each gameweek you can buy one <b>pack</b> for ${money(c.pack_price_pence)}. It holds one random card from a fit player whose match isn't under way: ${c.pack_odds.slice().reverse().map((o) => `${o.percent}% ${BAND_NAMES[o.band]}`).join(', ')}. The price is about what the average pull is worth, so a pack is a gamble on a Gold rather than free money. Opening one doesn't move the player's price.</li>
         <li>The leaderboard ranks everyone by total value: cash plus cards at today's prices. Everyone restarts with ${money(c.starting_cash_pence)} each season, and the all-time table adds up your profit across seasons.</li>
       </ol>
     </div>
