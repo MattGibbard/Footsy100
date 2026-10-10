@@ -1,32 +1,62 @@
 // Footsy100 front end: a small vanilla JS single-page app.
+// Every player is a card, coloured by the band his price sits in.
 
-const MICRO = 1_000_000;
 const app = document.getElementById('app');
-const state = { me: null, market: null, config: null };
+const state = { me: null, market: null, config: null, cash: null, owned: {} };
 
 // ---------- helpers ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const money = (p) => `${p < 0 ? '-' : ''}£${(Math.abs(p) / 100).toFixed(2)}`;
-const shares = (m) => (m / MICRO).toLocaleString('en-GB', { maximumFractionDigits: 4 });
+const money = (p) => `${p < 0 ? '−' : ''}£${(Math.abs(p) / 100).toFixed(2)}`;
+const signedMoney = (p) => `${p > 0 ? '+' : ''}${money(p)}`;
 const pct = (now, before) => (before ? ((now - before) / before) * 100 : 0);
-const pctText = (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
-const cls = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : 'muted');
+// Changes always carry an arrow and a sign, never colour alone.
+const pctText = (v) => (v > 0 ? `▲ ${v.toFixed(1)}%` : v < 0 ? `▼ ${Math.abs(v).toFixed(1)}%` : '0.0%');
+const cls = (v) => (v > 0 ? 'rise' : v < 0 ? 'fall' : 'muted');
+const cardsText = (n) => `${n} card${n === 1 ? '' : 's'}`;
 const when = (iso) =>
   iso ? new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z').toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'TBC';
+const POSITIONS = { GKP: 'Goalkeeper', DEF: 'Defender', MID: 'Midfielder', FWD: 'Forward' };
+const FEE_BP = () => state.config?.sell_fee_bp ?? 200;
+const saleQuote = (n, price) => {
+  const gross = n * price;
+  const fee = Math.ceil((gross * FEE_BP()) / 10000);
+  return { gross, fee, net: gross - fee };
+};
+
+// Price bands: the card's whole colour comes from its price.
+const BANDS = [
+  { key: 'top', min: 1100, sw: 't', range: '£11.00 and up', note: 'The stars. Premium prices.' },
+  { key: 'mid', min: 750, sw: 'm', range: '£7.50–£10.99', note: 'Regular starters. Room to grow.' },
+  { key: 'low', min: 0, sw: 'l', range: 'Under £7.50', note: 'Bargains. Big upside if they click.' },
+];
+const band = (pence) => BANDS.find((b) => pence >= b.min).key;
+
+function bandKey() {
+  return `<div class="band-key">${BANDS.map((b) => `<div class="item"><span class="range"><span class="sw ${b.sw}"></span>${b.range}</span><span class="note">${b.note}</span></div>`).join('')}
+    <div class="item"><span class="range">Cards change colour</span><span class="note">A great game can promote a card. A bad one can drop it.</span></div></div>`;
+}
 
 // Official Premier League photos and crests, keyed by FPL's `code` fields. The
-// PL moved its image paths for 2025/26, so the older path is tried next, and a
-// plain placeholder shows if neither has the image (e.g. a new signing).
+// PL moved its image paths for 2025/26, so the older paths are tried next, and a
+// plain placeholder shows if none has the image (e.g. a new signing).
 const PL_CDN = 'https://resources.premierleague.com/premierleague';
 const IMAGE_URLS = {
   photo: (c) => [`${PL_CDN}25/photos/players/110x140/${c}.png`, `${PL_CDN}/photos/players/110x140/p${c}.png`],
+  // Cards show the photo larger, so try the bigger renditions first.
+  'photo-card': (c) => [
+    `${PL_CDN}25/photos/players/250x250/${c}.png`,
+    `${PL_CDN}/photos/players/250x250/p${c}.png`,
+    `${PL_CDN}25/photos/players/110x140/${c}.png`,
+    `${PL_CDN}/photos/players/110x140/p${c}.png`,
+  ],
   crest: (c) => [`${PL_CDN}25/badges/${c}.svg`, `${PL_CDN}/badges/70/t${c}.png`],
 };
-function img(kind, code, size = 'sm') {
+function img(kind, code, size = 'sm', alt = '') {
   const cls = `${kind} ${kind}-${size}`;
-  if (!code) return `<span class="${cls} img-missing" aria-hidden="true"></span>`;
-  const [src, ...fallbacks] = IMAGE_URLS[kind](code);
-  return `<img class="${cls}" src="${src}" data-fallback="${fallbacks.join(' ')}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+  const attrs = alt ? `role="img" aria-label="${esc(alt)}"` : 'aria-hidden="true"';
+  if (!code) return `<span class="${cls} img-missing" ${attrs}></span>`;
+  const [src, ...fallbacks] = IMAGE_URLS[kind === 'photo' && size === 'card' ? 'photo-card' : kind](code);
+  return `<img class="${cls}" src="${src}" data-fallback="${fallbacks.join(' ')}" alt="${esc(alt)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
 }
 // Image errors don't bubble, so listen in the capture phase.
 document.addEventListener(
@@ -77,13 +107,6 @@ function navigate(path) {
   route();
 }
 
-document.addEventListener('click', (e) => {
-  const a = e.target.closest('a[data-link]');
-  if (a && !e.metaKey && !e.ctrlKey) {
-    e.preventDefault();
-    navigate(a.getAttribute('href'));
-  }
-});
 window.addEventListener('popstate', route);
 
 function emptyMarketText() {
@@ -102,9 +125,24 @@ async function loadMarket(force = false) {
   if (!state.market.players.length) state.status = await api('/status').catch(() => null);
   const m = state.market;
   m.teamById = Object.fromEntries(m.teams.map((t) => [t.id, t]));
+  m.playerById = Object.fromEntries(m.players.map((p) => [p.id, p]));
   m.locked = new Set(m.locked_teams);
   m.teamState = m.team_states ?? {};
+  m.form ??= {};
   return m;
+}
+
+// Cash and cards held, for the header and the "You own" tags on cards.
+async function refreshWallet() {
+  if (!state.me) {
+    state.cash = null;
+    state.owned = {};
+  } else {
+    const pf = await api('/portfolio').catch(() => null);
+    state.cash = pf?.cash_pence ?? null;
+    state.owned = Object.fromEntries((pf?.holdings ?? []).map((h) => [h.player_id, h.cards]));
+  }
+  renderAccount();
 }
 
 // Why a player can't be traded right now: about to kick off, mid-match, or waiting for his new price.
@@ -113,124 +151,296 @@ const MATCH_STATES = {
   live: { label: 'Playing now', cls: 'live', title: 'His match is under way. Trading reopens once his new price is set.' },
   awaiting: { label: 'Awaiting new price', cls: 'lock', title: 'Full time. His new price is set once the final stats are in.' },
 };
-function matchBadge(state, extra = '') {
-  const s = MATCH_STATES[state];
-  return s ? `<span class="badge ${s.cls} ${extra}" title="${s.title}">${s.label}</span>` : '';
+function matchBadge(s) {
+  const m = MATCH_STATES[s];
+  return m ? `<span class="badge ${m.cls}" title="${m.title}">${m.label}</span>` : '';
 }
+// FPL availability flags.
+const AVAILABILITY = { d: 'Doubtful', i: 'Injured', s: 'Suspended', u: 'Unavailable', n: 'Not in squad' };
 
 function renderAccount() {
   const el = document.getElementById('account');
   el.innerHTML = state.me
-    ? `<a href="/account" data-link>${esc(state.me.display_name)}</a>`
-    : `<a href="/login" data-link><button class="primary">Sign in</button></a>`;
+    ? `${state.cash != null ? `<span class="cash-pill"><b>${money(state.cash)}</b> cash</span>` : ''}<a class="btn quiet" href="/account" data-link>${esc(state.me.display_name)}</a>`
+    : `<a class="btn quiet" href="/login" data-link>Log in</a><a class="btn primary header" href="/login" data-link>Sign up</a>`;
 }
 
 function needLogin() {
-  app.innerHTML = `<div class="card login"><h1>Sign in to play</h1><p class="muted">You get £100 of fake money to invest in Premier League players.</p><a href="/login" data-link><button class="primary">Sign in</button></a></div>`;
+  app.innerHTML = `<div class="signup narrow"><h2>Sign in to play</h2><p>Collect Premier League player cards with a £100 virtual budget. Play money only: it can't be topped up or cashed out.</p><a class="btn primary lg block" href="/login" data-link>Sign in or join</a></div>`;
 }
 
-// ---------- pages ----------
-async function marketPage() {
-  const m = await loadMarket();
-  const prefs = (marketPage.prefs ??= { q: '', team: '', pos: '', sort: 'price', dir: -1 });
-  app.innerHTML = `
-    <h1>Market</h1>
-    <p class="muted">Buy shares at today's price. Trading on a player locks ${m.lock_hours} hours before his team kicks off and reopens once the match is settled.</p>
-    ${m.players.length ? moversSection(m) : ''}
-    <div class="toolbar">
-      <input id="q" placeholder="Search players" value="${esc(prefs.q)}">
-      <select id="team"><option value="">All teams</option>${m.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
-      <select id="pos"><option value="">All positions</option>${['GKP', 'DEF', 'MID', 'FWD'].map((p) => `<option ${p === prefs.pos ? 'selected' : ''}>${p}</option>`).join('')}</select>
+// ---------- the player card ----------
+// Height of each form bar: price as a share of £15, so the top band fills the box.
+function formBars(prices) {
+  const list = prices.slice(-5);
+  const bars = list.map((v) => `<span class="b-${band(v)}" style="height:${Math.max(6, Math.min(100, (v / 1500) * 100)).toFixed(0)}%"></span>`).join('');
+  return `<div class="bars" role="img" aria-label="Price after recent matches: ${list.map(money).join(', ')}">${bars}</div>`;
+}
+
+function buyLabel(n, price) {
+  return n === 1 ? `Buy for ${money(price)}` : `Buy ${n} for ${money(n * price)}`;
+}
+function sellLabel(n, price) {
+  return n === 1 ? `Sell for ${money(saleQuote(1, price).net)}` : `Sell ${n} for ${money(saleQuote(n, price).net)}`;
+}
+function stepper(max, label) {
+  return `<div class="stepper"><button type="button" data-step="-1" aria-label="One fewer">−</button><input type="number" inputmode="numeric" min="1" max="${max}" step="1" value="1" aria-label="${label}"><button type="button" data-step="1" aria-label="One more">+</button></div>`;
+}
+// The buy controls on a card: a stepper for how many, then the band-coloured button.
+function buyRow(p, matchState, compact = false) {
+  if (matchState) return `<div class="buy-row"><button class="btn-band" disabled>${MATCH_STATES[matchState].label}</button></div>`;
+  return `<div class="buy-row">${compact ? '' : stepper(1000, 'Number of cards to buy')}<button class="btn-band" data-buy="${p.id}" data-price="${p.price_pence}">${buyLabel(1, p.price_pence)}</button></div>`;
+}
+
+// p: a player row from /players (id, code, web_name, team_id, position, status, price_pence, prev_price_pence).
+function playerCard(p, m, o = {}) {
+  const team = m.teamById[p.team_id];
+  const diff = p.prev_price_pence ? p.price_pence - p.prev_price_pence : null;
+  const ch = pct(p.price_pence, p.prev_price_pence);
+  const matchState = m.teamState[p.team_id];
+  const form = m.form[p.id] ? JSON.parse(m.form[p.id]) : [];
+  const owned = state.owned[p.id];
+  const flag = AVAILABILITY[p.status];
+  const tag = matchState ? matchBadge(matchState) : flag ? `<span class="badge flag" title="FPL availability flag">${flag}</span>` : '';
+  return `<article class="pcard band-${band(p.price_pence)}${o.featured ? ' featured' : ''}" data-card="${p.id}">
+    <div class="head"><div class="id">${img('crest', team?.code, 'md', `${team?.name ?? 'Club'} crest`)}<span class="pos" title="${POSITIONS[p.position] ?? ''}">${p.position}</span></div><span class="price">${money(p.price_pence)}</span></div>
+    <a class="cover portrait" href="/player/${p.id}" data-link tabindex="-1">${img('photo', p.code, 'card', `Photo of ${p.web_name}`)}${tag ? `<span class="tag">${tag}</span>` : ''}${owned ? `<span class="owned badge me">You own ${owned}</span>` : ''}</a>
+    <div class="body">
+      <h3 class="name"><a href="/player/${p.id}" data-link>${esc(p.web_name)}</a></h3>
+      <div><span class="caption">Price · last 5 matches</span>${formBars(form.length ? form : [p.price_pence])}</div>
+      <div class="row">${diff != null ? `<span class="since">${signedMoney(diff)} since full time</span><span class="change ${cls(ch)}">${pctText(ch)}</span>` : '<span class="since">No matches settled yet</span>'}</div>
+      ${o.buy === false ? '' : buyRow(p, matchState, o.compact)}
     </div>
-    <div class="table-wrap"><table>
-      <thead><tr>
-        <th class="sortable" data-sort="name">Player</th><th>Team</th><th>Pos</th>
-        <th class="sortable num" data-sort="price">Price</th><th class="sortable num" data-sort="change">Last match</th>
-        <th class="hide-sm">Next match</th>
-      </tr></thead>
-      <tbody id="rows"></tbody>
-    </table></div>`;
+  </article>`;
+}
 
-  const draw = () => {
+// ---------- trading ----------
+document.addEventListener('click', async (e) => {
+  const a = e.target.closest('a[data-link]');
+  if (a && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    navigate(a.getAttribute('href'));
+    return;
+  }
+  const step = e.target.closest('[data-step]');
+  if (step) {
+    const input = step.parentElement.querySelector('input');
+    input.value = Math.max(1, Math.min(Number(input.max) || 1000, (Number(input.value) || 1) + Number(step.dataset.step)));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+  const btn = e.target.closest('[data-buy], [data-sell]');
+  if (!btn) return;
+  if (!state.me) {
+    const join = document.getElementById('join');
+    return join ? join.scrollIntoView({ behavior: 'smooth', block: 'center' }) : navigate('/login');
+  }
+  const id = Number(btn.dataset.buy ?? btn.dataset.sell);
+  const qty = btn.dataset.all ? 'all' : Number(btn.closest('.buy-row')?.querySelector('input')?.value || 1);
+  btn.disabled = true;
+  try {
+    let r;
+    if (btn.dataset.buy) {
+      r = await api('/trade', { method: 'POST', body: { player_id: id, side: 'buy', cards: qty } });
+      toast(`Bought ${cardsText(r.cards)} for ${money(r.gross_pence)}`);
+    } else {
+      r = await api('/trade', { method: 'POST', body: { player_id: id, side: 'sell', cards: qty } });
+      toast(`Sold ${cardsText(r.cards)} for ${money(r.net_pence)} after a ${money(r.fee_pence)} fee`);
+    }
+    await refreshWallet();
+    const onPlayerPage = location.pathname === `/player/${id}`;
+    if (onPlayerPage) return void (await playerPage(id));
+    // Elsewhere, redraw just this card so the page doesn't jump.
+    const card = btn.closest('[data-card]');
+    const m = state.market;
+    if (card && m?.playerById[id]) card.outerHTML = playerCard(m.playerById[id], m, { featured: card.classList.contains('featured'), compact: !!card.closest('.fan') });
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Keep the stepper in range and the button's label in step with it.
+document.addEventListener('input', (e) => {
+  const input = e.target.closest('.stepper input');
+  if (!input) return;
+  const row = input.closest('.buy-row');
+  const n = Math.max(1, Math.min(Number(input.max) || 1000, Math.floor(Number(input.value)) || 1));
+  if (String(n) !== input.value && input.value !== '') input.value = n;
+  const buy = row.querySelector('[data-buy]');
+  if (buy) buy.textContent = buyLabel(n, Number(buy.dataset.price));
+  const sell = row.querySelector('[data-sell]');
+  if (sell) {
+    const price = Number(sell.dataset.price);
+    sell.textContent = sellLabel(n, price);
+    const q = row.parentElement.querySelector('[data-sell-quote]');
+    if (q) q.textContent = `${money(n * price)} less the ${money(saleQuote(n, price).fee)} fee (${FEE_BP() / 100}%).`;
+  }
+});
+
+// ---------- pages ----------
+async function homePage() {
+  const m = await loadMarket();
+  if (state.me) {
+    app.innerHTML = `
+      <h1>The market</h1>
+      <p class="intro">Buy whole cards at today's price. Trading on a player locks ${m.lock_hours} hours before his team kicks off and reopens once the match is settled.</p>
+      ${bandKey()}
+      ${m.players.length ? moversSection(m) : ''}
+      <h2>All players</h2>
+      ${marketTools(m)}`;
+  } else {
+    app.innerHTML = `
+      ${heroSection(m)}
+      ${bandKey()}
+      <section id="market"><h2>The market</h2>${marketTools(m)}</section>
+      <section class="two-col" style="margin-top:var(--space-10)">
+        ${signupPanel()}
+        <div class="panel"><h2>Top collectors</h2><ol class="ranks" id="top5"><li class="empty muted">Loading…</li></ol></div>
+      </section>`;
+    wireSignup();
+    api('/leaderboard?scope=season')
+      .then((d) => (document.getElementById('top5').innerHTML = rankRows(d.standings.slice(0, 5), 'season')))
+      .catch(() => (document.getElementById('top5').innerHTML = '<li class="empty muted">The season hasn\'t started yet.</li>'));
+  }
+  wireMarket(m);
+}
+
+function heroSection(m) {
+  const byPrice = [...m.players].sort((a, b) => b.price_pence - a.price_pence);
+  const featured = byPrice[0];
+  const mid = byPrice.find((p) => band(p.price_pence) === 'mid');
+  const low = byPrice.find((p) => band(p.price_pence) === 'low');
+  const fan = featured && mid && low ? [mid, low, featured] : [];
+  return `<section class="hero">
+    <div>
+      <p class="eyebrow">Premier League · Free to play</p>
+      <h1>Collect players. <span>Their form is your fortune.</span></h1>
+      <p class="lead">Every footballer is a card with a live price. Buy cards with your virtual budget, and watch values climb or fall with every match they play.</p>
+      <div class="actions"><a class="btn primary lg" href="#join">Get your free £100 budget</a><a class="btn lg" href="#market">Browse the market</a></div>
+      <p class="note">Play money only: it can't be topped up or cashed out.</p>
+    </div>
+    <div class="fan" aria-label="Featured player cards">${fan.map((p) => playerCard(p, m, { featured: p === featured, compact: true })).join('')}</div>
+  </section>`;
+}
+
+function signupPanel() {
+  return `<div class="signup" id="join">
+    <h2>Start your collection</h2>
+    <p>A £100 virtual budget to spend on day one. Play money only: it can't be topped up or cashed out.</p>
+    <form id="signup">
+      <label for="email">Email</label>
+      <input id="email" type="email" required autocomplete="email" placeholder="you@example.com">
+      <button class="btn primary lg">Claim my £100</button>
+      <p class="msg" id="login-msg" role="status"></p>
+    </form>
+    <p class="small">We'll email you a sign-in link. No password needed.</p>
+  </div>`;
+}
+function wireSignup() {
+  document.getElementById('signup').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('login-msg');
+    try {
+      const r = await api('/auth/request', { method: 'POST', body: { email: document.getElementById('email').value } });
+      msg.innerHTML = r.devLink ? `Dev mode: <a href="${esc(r.devLink)}">open your sign-in link</a>` : 'Check your inbox for a sign-in link. It expires in 15 minutes.';
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+}
+
+const SORTS = {
+  'price-desc': { label: 'Price: high to low', key: (p) => -p.price_pence },
+  'price-asc': { label: 'Price: low to high', key: (p) => p.price_pence },
+  rise: { label: 'Biggest rise', key: (p) => -pct(p.price_pence, p.prev_price_pence) },
+  fall: { label: 'Biggest fall', key: (p) => pct(p.price_pence, p.prev_price_pence) },
+  name: { label: 'Name', key: (p) => p.web_name.toLowerCase() },
+};
+const PAGE = 24;
+
+function marketTools(m) {
+  const prefs = (homePage.prefs ??= { q: '', team: '', pos: '', sort: 'price-desc' });
+  return `<div class="toolbar">
+      <input id="q" type="search" placeholder="Search players" aria-label="Search players" value="${esc(prefs.q)}">
+      <select id="team" aria-label="Club"><option value="">All clubs</option>${m.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+      <select id="pos" aria-label="Position"><option value="">All positions</option>${Object.entries(POSITIONS).map(([k, v]) => `<option value="${k}" ${k === prefs.pos ? 'selected' : ''}>${v}s</option>`).join('')}</select>
+      <select id="sort" aria-label="Sort">${Object.entries(SORTS).map(([k, s]) => `<option value="${k}" ${k === prefs.sort ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
+    </div>
+    <p class="small muted" id="count"></p>
+    <div class="card-grid" id="grid"></div>
+    <div class="more"><button class="btn" id="more" hidden>Show more</button></div>`;
+}
+
+function wireMarket(m) {
+  const prefs = homePage.prefs;
+  let limit = PAGE;
+  let list = [];
+  const filter = () => {
     const q = prefs.q.toLowerCase();
-    let list = m.players.filter(
-      (p) =>
-        (!prefs.team || String(p.team_id) === prefs.team) &&
-        (!prefs.pos || p.position === prefs.pos) &&
-        (!q || `${p.first_name} ${p.second_name} ${p.web_name}`.toLowerCase().includes(q)),
-    );
-    const key = { name: (p) => p.web_name, price: (p) => p.price_pence, change: (p) => pct(p.price_pence, p.prev_price_pence) }[prefs.sort];
-    list = list.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0) * prefs.dir).slice(0, 300);
-    document.getElementById('rows').innerHTML =
-      list
-        .map((p) => {
-          const ch = pct(p.price_pence, p.prev_price_pence);
-          const nf = m.next_fixtures[p.team_id];
-          const opp = nf ? `${esc(m.teamById[nf.opponent]?.short_name)} (${nf.home ? 'H' : 'A'}) · ${when(nf.kickoff_time)}` : '<span class="muted">None</span>';
-          return `<tr class="clickable" data-id="${p.id}">
-            <td><span class="who">${img('photo', p.code)}<span><b>${esc(p.web_name)}</b>${p.status !== 'a' ? ' <span class="badge" title="Availability flag from FPL">!</span>' : ''}${m.teamState[p.team_id] ? ' ' + matchBadge(m.teamState[p.team_id], 'show-sm') : ''}</span></span></td>
-            <td><span class="who">${img('crest', m.teamById[p.team_id]?.code)}${esc(m.teamById[p.team_id]?.short_name)}</span></td>
-            <td><span class="badge pos">${p.position}</span></td>
-            <td class="num">${money(p.price_pence)}</td>
-            <td class="num ${cls(ch)}">${p.prev_price_pence ? pctText(ch) : '–'}</td>
-            <td class="hide-sm">${m.teamState[p.team_id] ? matchBadge(m.teamState[p.team_id]) + ' ' : ''}<span class="small">${opp}</span></td>
-          </tr>`;
-        })
-        .join('') || `<tr><td colspan="6" class="empty">${m.players.length ? 'No players found.' : emptyMarketText()}</td></tr>`;
+    const key = SORTS[prefs.sort].key;
+    list = m.players
+      .filter(
+        (p) =>
+          (!prefs.team || String(p.team_id) === prefs.team) &&
+          (!prefs.pos || p.position === prefs.pos) &&
+          (!q || `${p.first_name} ${p.second_name} ${p.web_name}`.toLowerCase().includes(q)),
+      )
+      .map((p) => [key(p), p])
+      .sort((a, b) => (a[0] > b[0] ? 1 : a[0] < b[0] ? -1 : 0))
+      .map(([, p]) => p);
   };
-  draw();
-
-  document.getElementById('q').addEventListener('input', (e) => ((prefs.q = e.target.value), draw()));
-  document.getElementById('team').addEventListener('change', (e) => ((prefs.team = e.target.value), draw()));
-  document.getElementById('pos').addEventListener('change', (e) => ((prefs.pos = e.target.value), draw()));
-  app.querySelectorAll('th[data-sort]').forEach((th) =>
-    th.addEventListener('click', () => {
-      prefs.dir = prefs.sort === th.dataset.sort ? -prefs.dir : th.dataset.sort === 'name' ? 1 : -1;
-      prefs.sort = th.dataset.sort;
-      draw();
-    }),
-  );
-  app.querySelectorAll('tbody').forEach((tb) =>
-    tb.addEventListener('click', (e) => {
-      const tr = e.target.closest('tr[data-id]');
-      if (tr) navigate(`/player/${tr.dataset.id}`);
-    }),
-  );
+  const draw = () => {
+    document.getElementById('grid').innerHTML = list.length
+      ? list.slice(0, limit).map((p) => playerCard(p, m)).join('')
+      : `<div class="panel empty" style="grid-column:1/-1">${m.players.length ? 'No players found.' : emptyMarketText()}</div>`;
+    document.getElementById('count').textContent = list.length ? `Showing ${Math.min(limit, list.length)} of ${list.length} players` : '';
+    document.getElementById('more').hidden = limit >= list.length;
+  };
+  const redo = () => {
+    limit = PAGE;
+    filter();
+    draw();
+  };
+  redo();
+  document.getElementById('q').addEventListener('input', (e) => ((prefs.q = e.target.value), redo()));
+  document.getElementById('team').addEventListener('change', (e) => ((prefs.team = e.target.value), redo()));
+  document.getElementById('pos').addEventListener('change', (e) => ((prefs.pos = e.target.value), redo()));
+  document.getElementById('sort').addEventListener('change', (e) => ((prefs.sort = e.target.value), redo()));
+  document.getElementById('more').addEventListener('click', () => ((limit += PAGE), draw()));
 }
 
 // Top 10 risers and fallers over the last week, by % change.
 function moversSection(m) {
-  const byId = (m.playerById ??= Object.fromEntries(m.players.map((p) => [p.id, p])));
   const list = (title, rows) => {
     const body = rows
       .map((r, i) => {
-        const p = byId[r.player_id];
+        const p = m.playerById[r.player_id];
         if (!p) return '';
         const ch = pct(r.to_pence, r.from_pence);
-        return `<tr class="clickable" data-id="${p.id}">
-          <td class="num muted">${i + 1}</td>
-          <td><span class="who">${img('photo', p.code)}<span><b>${esc(p.web_name)}</b> <span class="muted small">${esc(m.teamById[p.team_id]?.short_name)}</span></span></span></td>
-          <td class="num">${money(r.to_pence)}</td>
-          <td class="num ${cls(ch)}">${pctText(ch)}</td>
-        </tr>`;
+        return `<li class="clickable" data-player="${p.id}"><span class="rank">${i + 1}</span>${img('photo', p.code)}
+          <span class="who-name">${esc(p.web_name)} <span class="muted small">${esc(m.teamById[p.team_id]?.short_name)}</span></span>
+          <span class="val">${money(r.to_pence)}</span><span class="chg ${cls(ch)}">${pctText(ch)}</span></li>`;
       })
       .join('');
-    return `<div><h2>${title}</h2><div class="table-wrap"><table>
-      <tbody>${body || `<tr><td colspan="4" class="empty">No price moves in the last ${m.movers.days} days yet.</td></tr>`}</tbody>
-    </table></div></div>`;
+    return `<div class="panel tight"><h3>${title}</h3><ol class="ranks">${body || `<li class="empty muted">No price moves in the last ${m.movers.days} days yet.</li>`}</ol></div>`;
   };
-  return `<div class="movers">${list('Top risers', m.movers.risers)}${list('Top fallers', m.movers.fallers)}</div>
-    <p class="muted small">Biggest price changes over the last ${m.movers.days} days. Prices move when a player's match is settled.</p>`;
+  return `<h2>Movers this week</h2><div class="movers">${list('Top risers', m.movers.risers)}${list('Top fallers', m.movers.fallers)}</div>`;
 }
+document.addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-player]');
+  if (li) navigate(`/player/${li.dataset.player}`);
+});
 
 function sparkline(points) {
-  if (points.length < 2) return '<p class="muted small">Price history appears after his first settled match.</p>';
-  const w = 600, h = 120, pad = 6;
+  if (points.length < 2) return '<p class="muted small" style="margin:0">Price history appears after his first settled match.</p>';
+  const w = 600, h = 140, pad = 6;
   const min = Math.min(...points), max = Math.max(...points);
   const span = max - min || 1;
   const xy = points.map((v, i) => [pad + (i * (w - 2 * pad)) / (points.length - 1), h - pad - ((v - min) * (h - 2 * pad)) / span]);
   const line = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join('');
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Price history">
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Price history from ${money(points[0])} to ${money(points[points.length - 1])}">
     <path class="area" d="${line}L${w - pad},${h}L${pad},${h}Z"/><path class="line" d="${line}"/></svg>`;
 }
 
@@ -246,8 +456,8 @@ function upcomingFixtures(list, teamId, teamById) {
   const lockAt = next.kickoff_time ? new Date(new Date(next.kickoff_time).getTime() - (state.market?.lock_hours ?? 2) * 3_600_000).toISOString() : null;
   return `
     <h2>Next match</h2>
-    <div class="card next-match">
-      <div class="nm-teams"><span class="who">${img('crest', teamById[next.team_h]?.code)}${esc(teamById[next.team_h]?.name)}</span> <span class="muted">v</span> <span class="who">${img('crest', teamById[next.team_a]?.code)}${esc(teamById[next.team_a]?.name)}</span></div>
+    <div class="panel tight next-match">
+      <div class="nm-teams"><span class="who">${img('crest', teamById[next.team_h]?.code, 'md')}${esc(teamById[next.team_h]?.name)}</span> <span class="muted">v</span> <span class="who">${img('crest', teamById[next.team_a]?.code, 'md')}${esc(teamById[next.team_a]?.name)}</span></div>
       <div class="muted">${n.home ? 'Home' : 'Away'} vs ${esc(n.opp?.name)}${next.event ? ` · Gameweek ${next.event}` : ''}</div>
       <div class="nm-when">${next.finished_provisional ? '<span class="badge lock">Full time, waiting for final stats</span>' : next.started ? '<span class="badge live">Playing now</span>' : when(next.kickoff_time)}</div>
       ${lockAt && !next.started ? `<div class="small muted">Trading on him locks ${when(lockAt)}</div>` : ''}
@@ -271,26 +481,27 @@ async function playerPage(id) {
   const p = d.player;
   const ch = pct(p.price_pence, p.prev_price_pence);
   const prices = d.history.length ? [d.history[d.history.length - 1].old_price_pence, ...d.history.slice().reverse().map((h) => h.new_price_pence)] : [];
-  const feePct = (state.config?.sell_fee_bp ?? 200) / 100;
+  const held = d.holding?.cards ?? 0;
+  state.owned[p.id] = held || undefined;
 
   app.innerHTML = `
-    <p><a href="/" data-link>← Market</a></p>
-    <div class="player-head">
-      ${img('photo', p.code, 'lg')}
-      <div>
-        <h1>${esc(p.first_name)} ${esc(p.second_name)}</h1>
-        <p class="muted who">${img('crest', p.team_code)}${esc(p.team_name)} · ${p.position}</p>
-        ${d.match_state ? `<p>${matchBadge(d.match_state)}</p>` : ''}
+    <a class="back" href="/" data-link>← Market</a>
+    <div class="player-layout">
+      <div class="side">
+        ${playerCard(p, { ...m, teamState: { ...m.teamState, [p.team_id]: d.match_state ?? undefined } }, { featured: true, buy: false })}
+        <div class="panel tight trade-box band-${band(p.price_pence)}" id="trade"></div>
       </div>
-    </div>
-    <div class="grid grid-2">
-      <div>
+      <div class="main">
+        <h1 style="margin-top:0">${esc(p.first_name)} ${esc(p.second_name)}</h1>
+        <p class="muted who">${img('crest', p.team_code, 'md')}${esc(p.team_name)} · ${POSITIONS[p.position] ?? p.position}</p>
+        ${d.match_state ? `<p>${matchBadge(d.match_state)}</p>` : ''}
         <div class="stats">
           <div class="stat"><div class="label">Price</div><div class="value">${money(p.price_pence)}</div></div>
-          <div class="stat"><div class="label">Last match</div><div class="value ${cls(ch)}">${p.prev_price_pence ? pctText(ch) : '–'}</div></div>
-          ${d.holding ? `<div class="stat"><div class="label">You own</div><div class="value">${shares(d.holding.shares_micro)}</div><div class="small muted">worth ${money(Math.floor((d.holding.shares_micro * p.price_pence) / MICRO))}</div></div>` : ''}
+          <div class="stat"><div class="label">Since full time</div><div class="value ${cls(ch)}">${p.prev_price_pence ? pctText(ch) : '–'}</div>${p.prev_price_pence ? `<div class="small muted">${signedMoney(p.price_pence - p.prev_price_pence)}</div>` : ''}</div>
+          ${held ? `<div class="stat"><div class="label">You own</div><div class="value">${held}</div><div class="small muted">worth ${money(held * p.price_pence)}</div></div>` : ''}
         </div>
-        <div class="card">${sparkline(prices)}</div>
+        <h2>Price history</h2>
+        <div class="panel tight">${sparkline(prices)}</div>
         ${upcomingFixtures(d.upcoming, p.team_id, m.teamById)}
         <h2>Recent matches</h2>
         ${
@@ -309,12 +520,11 @@ async function playerPage(id) {
             : '<p class="muted">No settled matches yet.</p>'
         }
       </div>
-      <div class="card trade-box" id="trade"></div>
     </div>`;
 
   const box = document.getElementById('trade');
   if (!state.me) {
-    box.innerHTML = `<h2 style="margin-top:0">Trade</h2><p class="muted">Sign in to buy shares.</p><a href="/login" data-link><button class="primary">Sign in</button></a>`;
+    box.innerHTML = `<h3>Collect this card</h3><p class="muted">Sign up to get a £100 virtual budget and start collecting.</p><a class="btn primary block" href="/login" data-link>Get your free £100 budget</a>`;
     return;
   }
   if (d.locked) {
@@ -322,100 +532,82 @@ async function playerPage(id) {
       live: 'His match is being played right now. Trading reopens once the final stats are in and his new price is set.',
       awaiting: 'His match has finished. Trading reopens once the final stats are in and his new price is set, usually within about half an hour of full time.',
     }[d.match_state] ?? `His team kicks off ${when(d.locked_kickoff)}. Trading reopens once the match has been played and prices are settled.`;
-    box.innerHTML = `<h2 style="margin-top:0">Trading locked</h2><p class="muted">${why}</p>`;
+    box.innerHTML = `<h3>Trading paused</h3><p class="muted">${why}</p>`;
     return;
   }
-  const pf = await api('/portfolio').catch(() => null);
+  const affordable = state.cash != null ? Math.floor(state.cash / p.price_pence) : null;
   box.innerHTML = `
-    <h2 style="margin-top:0">Trade</h2>
-    <p class="small muted">Cash available: <b>${pf ? money(pf.cash_pence) : '–'}</b></p>
-    <label for="buy-amt">Buy (£)</label>
-    <div class="row"><input id="buy-amt" type="number" min="0.10" step="0.01" placeholder="10.00"><button class="primary" id="buy">Buy</button></div>
-    <div class="quote" id="buy-quote"></div>
+    <h3>Buy</h3>
+    <p class="small muted">Cash available: <b>${state.cash != null ? money(state.cash) : '–'}</b>${affordable != null ? ` · enough for ${cardsText(affordable)}` : ''}</p>
+    <div class="buy-row row">${stepper(Math.max(1, Math.min(1000, affordable ?? 1000)), 'Number of cards to buy')}<button class="btn-band" data-buy="${p.id}" data-price="${p.price_pence}">${buyLabel(1, p.price_pence)}</button></div>
     ${
-      d.holding
-        ? `<label for="sell-amt">Sell (shares)</label>
-      <div class="row"><input id="sell-amt" type="number" min="0" step="0.0001" placeholder="${shares(d.holding.shares_micro)}"><button class="danger" id="sell">Sell</button></div>
-      <button class="link small" id="sell-all">Sell all ${shares(d.holding.shares_micro)} shares</button>
-      <div class="quote" id="sell-quote"></div>`
-        : ''
-    }
-    <p class="small muted">A ${feePct}% fee is taken when you sell.</p>`;
-
-  const buyAmt = document.getElementById('buy-amt');
-  buyAmt.addEventListener('input', () => {
-    const pence = Math.round(Number(buyAmt.value) * 100);
-    document.getElementById('buy-quote').textContent = pence > 0 ? `≈ ${shares(Math.ceil((pence * MICRO) / p.price_pence))} shares at ${money(p.price_pence)}` : '';
-  });
-  document.getElementById('buy').addEventListener('click', () =>
-    trade({ player_id: p.id, side: 'buy', amount_pence: Math.round(Number(buyAmt.value) * 100) }, id),
-  );
-  if (d.holding) {
-    const sellAmt = document.getElementById('sell-amt');
-    const quote = (micro) => {
-      const gross = Math.floor((micro * p.price_pence) / MICRO);
-      const fee = Math.ceil((gross * feePct) / 100);
-      document.getElementById('sell-quote').textContent = micro > 0 ? `≈ ${money(gross - fee)} after ${money(fee)} fee` : '';
-    };
-    sellAmt.addEventListener('input', () => quote(Math.round(Number(sellAmt.value) * MICRO)));
-    document.getElementById('sell').addEventListener('click', () => {
-      let micro = Math.round(Number(sellAmt.value) * MICRO);
-      if (micro >= d.holding.shares_micro) micro = d.holding.shares_micro;
-      trade({ player_id: p.id, side: 'sell', shares_micro: micro }, id);
-    });
-    document.getElementById('sell-all').addEventListener('click', () => trade({ player_id: p.id, side: 'sell', shares_micro: 'all' }, id));
-  }
+      held
+        ? `<h3 style="margin-top:var(--space-3)">Sell</h3>
+      <p class="small muted">You own ${cardsText(held)}, worth ${money(held * p.price_pence)}.</p>
+      <div class="buy-row row">${stepper(held, 'Number of cards to sell')}<button class="btn danger" data-sell="${p.id}" data-price="${p.price_pence}">${sellLabel(1, p.price_pence)}</button></div>
+      <p class="quote" data-sell-quote>${money(p.price_pence)} less the ${money(saleQuote(1, p.price_pence).fee)} fee (${FEE_BP() / 100}%).</p>
+      ${held > 1 ? `<p><button class="link small" data-sell="${p.id}" data-all="1">Sell all ${held} for ${money(saleQuote(held, p.price_pence).net)}</button></p>` : ''}`
+        : `<p class="small muted">Selling costs a ${FEE_BP() / 100}% fee.</p>`
+    }`;
 }
 
-async function trade(body, id) {
-  try {
-    const r = await api('/trade', { method: 'POST', body });
-    toast(r.side === 'buy' ? `Bought ${shares(r.shares_micro)} shares for ${money(r.gross_pence)}` : `Sold for ${money(r.net_pence)} (fee ${money(r.fee_pence)})`);
-    playerPage(id);
-  } catch (e) {
-    toast(e.message, true);
-  }
+function rankRows(rows, scope) {
+  if (!rows.length) return '<li class="empty muted">Nobody on the board yet.</li>';
+  return rows
+    .map(
+      (r) => `<li><span class="rank">${r.rank}</span><span class="who-name">${esc(r.display_name)} ${state.me?.id === r.user_id ? '<span class="badge me">You</span>' : ''}</span>
+        <span class="val ${scope === 'alltime' ? cls(r.total_pence) : ''}">${scope === 'alltime' ? signedMoney(r.total_pence) : money(r.total_pence)}</span></li>`,
+    )
+    .join('');
 }
 
 async function portfolioPage() {
   if (!state.me) return needLogin();
-  const [pf, tr] = await Promise.all([api('/portfolio'), api('/trades')]);
+  const [pf, tr, m] = await Promise.all([api('/portfolio'), api('/trades'), loadMarket()]);
+  state.cash = pf.cash_pence;
+  state.owned = Object.fromEntries(pf.holdings.map((h) => [h.player_id, h.cards]));
+  renderAccount();
   const profit = pf.total_pence - (state.config?.starting_cash_pence ?? 10000);
   app.innerHTML = `
-    <h1>Portfolio</h1>
+    <h1>My cards</h1>
     <div class="stats">
-      <div class="stat"><div class="label">Total value</div><div class="value">${money(pf.total_pence)}</div><div class="small ${cls(profit)}">${profit >= 0 ? '+' : ''}${money(profit)} this season</div></div>
+      <div class="stat"><div class="label">Total value</div><div class="value">${money(pf.total_pence)}</div><div class="small ${cls(profit)}">${signedMoney(profit)} this season</div></div>
       <div class="stat"><div class="label">Cash</div><div class="value">${money(pf.cash_pence)}</div></div>
-      <div class="stat"><div class="label">Invested</div><div class="value">${money(pf.holdings_value_pence)}</div></div>
+      <div class="stat"><div class="label">Cards</div><div class="value">${money(pf.holdings_value_pence)}</div><div class="small muted">${cardsText(pf.holdings.reduce((a, h) => a + h.cards, 0))}</div></div>
     </div>
-    <h2>Holdings</h2>
     ${
       pf.holdings.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Player</th><th class="num">Shares</th><th class="num">Price</th><th class="num">Value</th><th class="num">Gain</th></tr></thead><tbody>
+        ? `<div class="card-grid">${pf.holdings.map((h) => playerCard(m.playerById[h.player_id] ?? { ...h, id: h.player_id }, m)).join('')}</div>
+      <h2>Breakdown</h2>
+      <div class="table-wrap"><table><thead><tr><th>Player</th><th class="num">Cards</th><th class="num">Price</th><th class="num">Value</th><th class="num">Gain</th></tr></thead><tbody>
       ${pf.holdings
         .map((h) => {
           const gain = h.value_pence - h.cost_pence;
-          return `<tr class="clickable" onclick="history.pushState(null,'','/player/${h.player_id}');dispatchEvent(new PopStateEvent('popstate'))">
+          return `<tr class="clickable" data-href="/player/${h.player_id}">
             <td><span class="who">${img('photo', h.code)}<span><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span>${h.match_state ? ' ' + matchBadge(h.match_state) : ''}</span></span></td>
-            <td class="num">${shares(h.shares_micro)}</td><td class="num">${money(h.price_pence)}</td>
-            <td class="num">${money(h.value_pence)}</td><td class="num ${cls(gain)}">${gain >= 0 ? '+' : ''}${money(gain)}</td></tr>`;
+            <td class="num">${h.cards}</td><td class="num">${money(h.price_pence)}</td>
+            <td class="num">${money(h.value_pence)}</td><td class="num ${cls(gain)}">${signedMoney(gain)}</td></tr>`;
         })
         .join('')}</tbody></table></div>`
-        : `<div class="card empty">You don't own any players yet. <a href="/" data-link>Visit the market</a> to buy your first shares.</div>`
+        : `<div class="panel empty">You don't own any cards yet. <a href="/" data-link>Visit the market</a> to sign your first player.</div>`
     }
     <h2>Recent trades</h2>
     ${
       tr.trades.length
-        ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Player</th><th>Side</th><th class="num">Shares</th><th class="num">Price</th><th class="num">Total</th><th class="num">Fee</th></tr></thead><tbody>
+        ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Player</th><th>Side</th><th class="num">Cards</th><th class="num">Price</th><th class="num">Total</th><th class="num">Fee</th></tr></thead><tbody>
       ${tr.trades
         .map(
-          (t) => `<tr><td class="small">${when(t.created_at)}</td><td>${esc(t.web_name)}</td><td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side}</td>
-          <td class="num">${shares(t.shares_micro)}</td><td class="num">${money(t.price_pence)}</td><td class="num">${money(t.gross_pence)}</td><td class="num">${t.fee_pence ? money(t.fee_pence) : '–'}</td></tr>`,
+          (t) => `<tr><td class="small">${when(t.created_at)}</td><td>${esc(t.web_name)}</td><td class="${t.side === 'buy' ? 'rise' : 'fall'}">${t.side === 'buy' ? 'Bought' : 'Sold'}</td>
+          <td class="num">${t.cards}</td><td class="num">${money(t.price_pence)}</td><td class="num">${money(t.gross_pence)}</td><td class="num">${t.fee_pence ? money(t.fee_pence) : '–'}</td></tr>`,
         )
         .join('')}</tbody></table></div>`
         : '<p class="muted">No trades yet.</p>'
     }`;
 }
+document.addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-href]');
+  if (tr) navigate(tr.dataset.href);
+});
 
 async function fixturesPage() {
   const d = await api('/fixtures');
@@ -427,10 +619,10 @@ async function fixturesPage() {
 
   app.innerHTML = `
     <h1>Fixtures</h1>
-    <p class="muted">Premier League fixtures and results. Times are shown in your time zone. Click a team to see its players.</p>
+    <p class="intro">Premier League fixtures and results. Times are shown in your time zone. Pick a club to see its players.</p>
     <div class="toolbar">
-      <select id="fx-team"><option value="">All teams</option>${d.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
-      <div class="seg" id="gw-nav"><button id="gw-prev" aria-label="Previous gameweek">‹</button><select id="gw">${events.map((e) => `<option value="${e}" ${e === prefs.event ? 'selected' : ''}>Gameweek ${e}</option>`).join('')}</select><button id="gw-next" aria-label="Next gameweek">›</button></div>
+      <select id="fx-team" aria-label="Club"><option value="">All clubs</option>${d.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+      <div class="seg" id="gw-nav"><button id="gw-prev" aria-label="Previous gameweek">‹</button><select id="gw" aria-label="Gameweek">${events.map((e) => `<option value="${e}" ${e === prefs.event ? 'selected' : ''}>Gameweek ${e}</option>`).join('')}</select><button id="gw-next" aria-label="Next gameweek">›</button></div>
     </div>
     <div id="fx-list"></div>`;
 
@@ -438,13 +630,13 @@ async function fixturesPage() {
     // FPL marks a match finished only once bonus points are confirmed; full time comes first.
     const ft = f.finished || f.finished_provisional;
     const live = f.started && !ft;
-    const mid = ft || live ? `<b>${f.team_h_score ?? 0} – ${f.team_a_score ?? 0}</b>` : f.kickoff_time ? new Date(f.kickoff_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'TBC';
+    const mid = ft || live ? `${f.team_h_score ?? 0} – ${f.team_a_score ?? 0}` : f.kickoff_time ? new Date(f.kickoff_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'TBC';
     // Locks by team are for trading; only flag the match that is actually causing the lock.
     const lockedNow = !f.finished && f.kickoff_time && new Date(f.kickoff_time).getTime() - Date.now() <= d.lock_hours * 3_600_000 && (locked.has(f.team_h) || locked.has(f.team_a));
-    const team = (id, side) => `<a href="/" class="fx-team ${side}" data-team="${id}">${img('crest', teamById[id]?.code)}<span class="hide-sm">${esc(teamById[id]?.name)}</span><span class="show-sm">${esc(teamById[id]?.short_name)}</span></a>`;
+    const team = (id, side) => `<a href="/" class="fx-team ${side}" data-team="${id}">${img('crest', teamById[id]?.code, 'md')}<span class="hide-sm">${esc(teamById[id]?.name)}</span><span class="show-sm">${esc(teamById[id]?.short_name)}</span></a>`;
     return `<div class="fx-row">
       ${team(f.team_h, 'home')}
-      <div class="fx-mid">${mid}${live ? '<div class="small up">Live</div>' : ft ? '<div class="small muted">FT</div>' : lockedNow ? '<div><span class="badge lock">Locked</span></div>' : ''}</div>
+      <div class="fx-mid">${mid}${live ? '<div class="small rise">Live</div>' : ft ? '<div class="small muted">FT</div>' : lockedNow ? '<div><span class="badge lock">Locked</span></div>' : ''}</div>
       ${team(f.team_a, 'away')}
     </div>`;
   };
@@ -467,8 +659,8 @@ async function fixturesPage() {
       groups.at(-1).rows.push(f);
     }
     document.getElementById('fx-list').innerHTML = groups.length
-      ? groups.map((g) => `<h2 class="fx-day">${esc(g.k)}</h2><div class="card fx-card">${g.rows.map(row).join('')}</div>`).join('')
-      : `<div class="card empty">${d.fixtures.length ? 'No upcoming fixtures.' : "Fixtures haven't loaded yet."}</div>`;
+      ? groups.map((g) => `<h3 class="fx-day">${esc(g.k)}</h3><div class="panel fx-card">${g.rows.map(row).join('')}</div>`).join('')
+      : `<div class="panel empty">${d.fixtures.length ? 'No upcoming fixtures.' : "Fixtures haven't loaded yet."}</div>`;
     const i = events.indexOf(prefs.event);
     document.getElementById('gw-prev').disabled = i <= 0;
     document.getElementById('gw-next').disabled = i < 0 || i >= events.length - 1;
@@ -504,20 +696,10 @@ async function fixturesPage() {
     const a = e.target.closest('a[data-team]');
     if (!a) return;
     e.preventDefault();
-    marketPage.prefs = { ...(marketPage.prefs ?? { q: '', pos: '', sort: 'price', dir: -1 }), team: a.dataset.team, q: '' };
+    e.stopPropagation();
+    homePage.prefs = { ...(homePage.prefs ?? { q: '', pos: '', sort: 'price-desc' }), team: a.dataset.team, q: '' };
     navigate('/');
   });
-}
-
-function standingsTable(rows, scope) {
-  if (!rows.length) return '<div class="card empty">Nobody on the board yet.</div>';
-  return `<div class="table-wrap"><table><thead><tr><th class="num" style="width:60px">#</th><th>Manager</th><th class="num">${scope === 'alltime' ? 'All-time profit' : 'Total value'}</th></tr></thead><tbody>
-    ${rows
-      .map(
-        (r) => `<tr><td class="num">${r.rank}</td><td>${esc(r.display_name)} ${state.me?.id === r.user_id ? '<span class="badge me">You</span>' : ''}</td>
-        <td class="num ${scope === 'alltime' ? cls(r.total_pence) : ''}">${money(r.total_pence)}</td></tr>`,
-      )
-      .join('')}</tbody></table></div>`;
 }
 
 function scopeToggle(scope) {
@@ -526,7 +708,10 @@ function scopeToggle(scope) {
 
 async function leaderboardPage(scope = 'season') {
   const d = await api(`/leaderboard?scope=${scope}`);
-  app.innerHTML = `<h1>Leaderboard</h1><div class="toolbar">${scopeToggle(scope)}</div>${standingsTable(d.standings, scope)}`;
+  app.innerHTML = `<h1>Leaderboard</h1>
+    <p class="intro">${scope === 'alltime' ? 'Profit added up across every season.' : 'Ranked by total value: cash plus cards at today\'s prices.'}</p>
+    <div class="toolbar">${scopeToggle(scope)}</div>
+    <div class="panel" style="max-width:720px"><ol class="ranks">${rankRows(d.standings, scope)}</ol></div>`;
   app.querySelectorAll('[data-scope]').forEach((b) => b.addEventListener('click', () => leaderboardPage(b.dataset.scope)));
 }
 
@@ -535,20 +720,20 @@ async function leaguesPage() {
   const d = await api('/leagues');
   app.innerHTML = `
     <h1>Private leagues</h1>
-    <p class="muted">Compete with friends. Create a league and share its code, or join one with a code.</p>
-    <div class="grid grid-2">
+    <p class="intro">Compete with friends. Create a league and share its code, or join one with a code.</p>
+    <div class="two-col">
       <div>${
         d.leagues.length
           ? `<div class="table-wrap"><table><thead><tr><th>League</th><th>Code</th><th class="num">Members</th></tr></thead><tbody>
-        ${d.leagues.map((l) => `<tr><td><a href="/leagues/${l.id}" data-link>${esc(l.name)}</a></td><td class="code" style="font-size:14px">${esc(l.code)}</td><td class="num">${l.members}</td></tr>`).join('')}
+        ${d.leagues.map((l) => `<tr><td><a href="/leagues/${l.id}" data-link>${esc(l.name)}</a></td><td class="code" style="font-size:16px">${esc(l.code)}</td><td class="num">${l.members}</td></tr>`).join('')}
         </tbody></table></div>`
-          : '<div class="card empty">You are not in any leagues yet.</div>'
+          : '<div class="panel empty">You are not in any leagues yet.</div>'
       }</div>
-      <div class="card">
-        <h2 style="margin-top:0">Create a league</h2>
-        <div class="toolbar"><input id="lname" placeholder="League name" maxlength="40"><button class="primary" id="create">Create</button></div>
-        <h2>Join a league</h2>
-        <div class="toolbar"><input id="lcode" placeholder="Code" maxlength="6" style="text-transform:uppercase"><button id="join">Join</button></div>
+      <div class="panel">
+        <h3>Create a league</h3>
+        <div class="toolbar"><input id="lname" placeholder="League name" aria-label="League name" maxlength="40"><button class="btn primary" id="create">Create</button></div>
+        <h3>Join a league</h3>
+        <div class="toolbar"><input id="lcode" placeholder="Code" aria-label="League code" maxlength="6" style="text-transform:uppercase"><button class="btn" id="join-league">Join</button></div>
       </div>
     </div>`;
   document.getElementById('create').addEventListener('click', async () => {
@@ -559,7 +744,7 @@ async function leaguesPage() {
       toast(e.message, true);
     }
   });
-  document.getElementById('join').addEventListener('click', async () => {
+  document.getElementById('join-league').addEventListener('click', async () => {
     try {
       const r = await api('/leagues/join', { method: 'POST', body: { code: document.getElementById('lcode').value } });
       navigate(`/leagues/${r.league.id}`);
@@ -573,11 +758,11 @@ async function leaguePage(id, scope = 'season') {
   if (!state.me) return needLogin();
   const d = await api(`/leagues/${id}?scope=${scope}`);
   app.innerHTML = `
-    <p><a href="/leagues" data-link>← Leagues</a></p>
+    <a class="back" href="/leagues" data-link>← Leagues</a>
     <h1>${esc(d.league.name)}</h1>
-    <p class="muted">Invite friends with code <span class="code">${esc(d.league.code)}</span></p>
-    <div class="toolbar">${scopeToggle(scope)}<button class="danger" id="leave" style="margin-left:auto">Leave league</button></div>
-    ${standingsTable(d.standings, scope)}`;
+    <p class="intro">Invite friends with code <span class="code">${esc(d.league.code)}</span></p>
+    <div class="toolbar">${scopeToggle(scope)}<button class="btn danger" id="leave" style="margin-left:auto">Leave league</button></div>
+    <div class="panel" style="max-width:720px"><ol class="ranks">${rankRows(d.standings, scope)}</ol></div>`;
   app.querySelectorAll('[data-scope]').forEach((b) => b.addEventListener('click', () => leaguePage(id, b.dataset.scope)));
   document.getElementById('leave').addEventListener('click', async () => {
     if (!confirm('Leave this league?')) return;
@@ -587,25 +772,11 @@ async function leaguePage(id, scope = 'season') {
 }
 
 function loginPage() {
-  app.innerHTML = `
-    <div class="card login">
-      <h1>Sign in</h1>
-      <p class="muted">We'll email you a link to sign in. No password needed. New here? The same link creates your account with £100 to invest.</p>
-      <form id="login"><input id="email" type="email" placeholder="you@example.com" required autocomplete="email"><button class="primary" style="width:100%">Email me a link</button></form>
-      <p id="login-msg" class="small"></p>
-    </div>`;
-  document.getElementById('login').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = document.getElementById('login-msg');
-    try {
-      const r = await api('/auth/request', { method: 'POST', body: { email: document.getElementById('email').value } });
-      msg.innerHTML = r.devLink
-        ? `Dev mode: <a href="${esc(r.devLink)}">open your sign-in link</a>`
-        : 'Check your inbox for a sign-in link. It expires in 15 minutes.';
-    } catch (err) {
-      msg.textContent = err.message;
-    }
-  });
+  app.innerHTML = `<div class="narrow">${signupPanel()}</div>`;
+  document.querySelector('#join h2').textContent = 'Sign in or join';
+  document.querySelector('#join p').textContent = "We'll email you a link to sign in. New here? The same link creates your account with a £100 virtual budget.";
+  document.querySelector('#join button').textContent = 'Email me a link';
+  wireSignup();
 }
 
 async function verifyPage() {
@@ -614,23 +785,26 @@ async function verifyPage() {
   try {
     const r = await api('/auth/verify', { method: 'POST', body: { token } });
     state.me = r.user;
-    renderAccount();
+    await refreshWallet();
     history.replaceState(null, '', r.is_new ? '/account' : '/');
-    if (r.is_new) toast('Welcome! You have £100 to invest. Pick a display name first.');
+    if (r.is_new) toast('Welcome! You have £100 to spend. Pick a display name first.');
     route();
   } catch (e) {
-    app.innerHTML = `<div class="card login"><h1>Link expired</h1><p class="muted">${esc(e.message)}</p><a href="/login" data-link><button class="primary">Get a new link</button></a></div>`;
+    app.innerHTML = `<div class="signup narrow"><h2>Link expired</h2><p>${esc(e.message)}</p><a class="btn primary lg block" href="/login" data-link>Get a new link</a></div>`;
   }
 }
 
 function accountPage() {
   if (!state.me) return needLogin();
   app.innerHTML = `
-    <div class="card login">
-      <h1>Your account</h1>
+    <div class="panel narrow">
+      <h2>Your account</h2>
       <p class="muted small">${esc(state.me.email)}</p>
-      <label class="small muted" for="dname">Display name (shown on leaderboards)</label>
-      <form id="acct"><input id="dname" maxlength="24" value="${esc(state.me.display_name)}"><button class="primary">Save</button></form>
+      <form id="acct" class="trade-box">
+        <label for="dname">Display name (shown on leaderboards)</label>
+        <input id="dname" maxlength="24" value="${esc(state.me.display_name)}">
+        <button class="btn primary">Save</button>
+      </form>
       <p><button class="link" id="logout">Sign out</button></p>
     </div>`;
   document.getElementById('acct').addEventListener('submit', async (e) => {
@@ -647,7 +821,7 @@ function accountPage() {
   document.getElementById('logout').addEventListener('click', async () => {
     await api('/auth/logout', { method: 'POST' });
     state.me = null;
-    renderAccount();
+    await refreshWallet();
     navigate('/');
   });
 }
@@ -673,18 +847,19 @@ function rulesPage() {
     ['Own goal', bp(w.ownGoal)],
     ['Each FPL bonus point (1 to 3)', bp(w.perBonusPoint)],
     ['Defensive contribution threshold reached', bp(w.defensiveContribution)],
-    ['Demand: every £100 net bought since his last match', `${bp(w.demandPer100Pounds)} (capped at ±${(w.demandCap / 100).toFixed(0)}%)`],
+    ['Demand: every 10 cards net bought since his last match', `${bp(w.demandPer10Cards)} (capped at ±${(w.demandCap / 100).toFixed(0)}%)`],
   ];
   app.innerHTML = `
     <h1>How it works</h1>
-    <div class="card">
+    <div class="panel rules">
       <ol>
-        <li>Sign up and get <b>${money(c.starting_cash_pence)}</b> of fake money for the season.</li>
-        <li>Buy shares in any Premier League player at his current price. Fractional shares are fine.</li>
+        <li>Sign up and get a <b>${money(c.starting_cash_pence)}</b> virtual budget for the season. It's play money only: it can't be topped up or cashed out.</li>
+        <li>Every Premier League player is a card. Buy cards at the player's current price. You can own several of the same card, but only whole cards.</li>
+        <li>A card's colour shows its price band: gold from £11.00, silver from £7.50 to £10.99, bronze under £7.50. Cards change colour as prices move.</li>
         <li>Trading on a player locks <b>2 hours before kick-off</b>.</li>
-        <li>After the final whistle, once the official stats are confirmed, his price moves based on how he played (and a little on how much people bought or sold him). Then trading reopens.</li>
+        <li>After the final whistle, once the official stats are confirmed, his price moves based on how he played (and a little on how many cards people bought or sold). Then trading reopens.</li>
         <li>Selling costs a <b>${c.sell_fee_bp / 100}% fee</b>.</li>
-        <li>The leaderboard ranks everyone by total value: cash plus shares at today's prices. Everyone restarts with ${money(c.starting_cash_pence)} each season, and the all-time table adds up your profit across seasons.</li>
+        <li>The leaderboard ranks everyone by total value: cash plus cards at today's prices. Everyone restarts with ${money(c.starting_cash_pence)} each season, and the all-time table adds up your profit across seasons.</li>
       </ol>
     </div>
     <h2>Price moves per match</h2>
@@ -701,7 +876,7 @@ async function route() {
   });
   try {
     let m;
-    if (path === '/') await marketPage();
+    if (path === '/') await homePage();
     else if ((m = path.match(/^\/player\/(\d+)$/))) await playerPage(m[1]);
     else if (path === '/fixtures') await fixturesPage();
     else if (path === '/portfolio') await portfolioPage();
@@ -715,7 +890,7 @@ async function route() {
     else app.innerHTML = '<div class="empty">Page not found. <a href="/" data-link>Back to the market</a></div>';
   } catch (e) {
     if (e.status === 401) return needLogin();
-    app.innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
+    app.innerHTML = `<div class="panel empty">${esc(e.message)}</div>`;
   }
   window.scrollTo(0, 0);
 }
@@ -725,5 +900,6 @@ async function route() {
   state.me = me.user;
   state.config = config;
   renderAccount();
+  await refreshWallet();
   route();
 })();

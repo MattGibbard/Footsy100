@@ -4,17 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Footsy100</title>
-  <meta name="description" content="The footballer stock exchange. Buy shares in Premier League players with £100 of fake money.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚽</text></svg>">
+  <meta name="description" content="The footballer card exchange. Collect Premier League player cards with a free £100 virtual budget and watch their prices move with every match.">
+  <meta name="theme-color" content="#0a1230">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'><rect width='34' height='34' rx='6' fill='%230a1230'/><polygon points='17,2 31,10 31,24 17,32 3,24 3,10' fill='none' stroke='%23F2C35B' stroke-width='2.5' stroke-linejoin='round'/><path d='M13 23V11h8.5M13 17h6.5' fill='none' stroke='%23F2C35B' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;800&family=Saira:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
   <header class="topbar">
-    <a href="/" class="brand" data-link><span class="brand-ball">⚽</span> Footsy<b>100</b></a>
+    <a href="/" class="brand" data-link aria-label="Footsy100 home">
+      <svg viewBox="0 0 34 34" aria-hidden="true"><polygon points="17,2 31,10 31,24 17,32 3,24 3,10" fill="none" stroke="#F2C35B" stroke-width="2.5" stroke-linejoin="round"/><path d="M13 23V11h8.5M13 17h6.5" fill="none" stroke="#F2C35B" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>FOOTSY<b>100</b></span>
+    </a>
     <nav class="nav">
       <a href="/" data-link>Market</a>
       <a href="/fixtures" data-link>Fixtures</a>
-      <a href="/portfolio" data-link>Portfolio</a>
+      <a href="/portfolio" data-link>My cards</a>
       <a href="/leaderboard" data-link>Leaderboard</a>
       <a href="/leagues" data-link>Leagues</a>
       <a href="/how-it-works" data-link>Rules</a>
@@ -22,8 +29,8 @@
     <div class="account" id="account"></div>
   </header>
   <main id="app" class="container"><p class="muted">Loading…</p></main>
-  <div id="toast" class="toast" hidden></div>
-  <footer class="footer">Footsy100 uses fake money only. Player data from the Fantasy Premier League API.</footer>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <footer class="footer">Footsy100 is played with virtual money only: it can't be topped up or cashed out. Player data from the Fantasy Premier League API.</footer>
   <script src="/app.js" type="module"></script>
 </body>
 </html>

@@ -1,19 +1,27 @@
 # Footsy100
 
-A footballer stock exchange played with fake money. Everyone starts the season with £100, buys shares in Premier League players, and prices move after each match based on how the player performed.
+A footballer card exchange played with fake money. Everyone starts the season with £100, buys cards of Premier League players, and prices move after each match based on how the player performed.
 
 - **Hosting:** one Cloudflare Worker that serves the static front end from `public/` and the API under `/api`, with a D1 database.
 - **Data:** the free (unofficial) Fantasy Premier League API, pulled by a cron trigger every 15 minutes. `src/fpl.ts` sits behind a `DataProvider` interface, so a paid source such as API-Football can replace it later.
 
 ## Game rules
-- New accounts get £100 per season. Fractional shares are allowed and the minimum trade is 10p.
+- New accounts get £100 per season. Players are bought as whole cards at their current price; you can own several of the same card, but not part of one.
+- A card's colour shows its price band: gold from £11.00, silver from £7.50 to £10.99, bronze below £7.50.
 - Starting prices come from FPL prices: a £5.5m FPL player lists at £5.50.
 - Trading on a player locks **2 hours before his team kicks off** and reopens once we settle prices: when FPL marks the match finished, or 2.5 hours after kick-off if FPL has the match at full time (bonus points are in by then, but FPL's final "finished" flag can take until the end of the day).
-- Settlement moves each player's price by the weights in `src/pricing.ts` (goals, assists, clean sheets, cards, saves, bonus, defensive contributions, minutes). A player who doesn't feature drifts down 1%. Net buying or selling since his last match adds a small nudge, capped at ±3%. A single match move is capped at −25% / +40%.
+- Settlement moves each player's price by the weights in `src/pricing.ts` (goals, assists, clean sheets, cards, saves, bonus, defensive contributions, minutes). A player who doesn't feature drifts down 1%. Net cards bought or sold since his last match add a small nudge (0.1% per 10 cards), capped at ±3%. A single match move is capped at −25% / +40%.
 - Selling costs a 2% fee.
 - Leaderboards rank by total value (cash plus holdings at current prices). When a new season appears in the FPL data, final values are frozen into an all-time table, prices reset to FPL prices, and everyone restarts at £100.
 - Private leagues use a 6-character invite code.
 - Sign-in is by emailed magic link (sent with [Resend](https://resend.com), free up to 3,000 emails a month).
+
+## Design
+The front end follows the PLAYEX Trading Cards design system (night navy, one gold accent, Saira type, player cards coloured by price band), with the Footsy100 name and real player photos and club crests.
+
+## Resetting trades
+`scripts/reset-trades.sql` deletes every trade and holding and puts every account back to £100, keeping users, leagues and prices:
+`npx wrangler d1 execute footsy100 --remote --file=scripts/reset-trades.sql`
 
 ## Local development
 ```sh
