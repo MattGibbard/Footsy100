@@ -478,7 +478,70 @@ function upcomingFixtures(list, teamId, teamById) {
     }`;
 }
 
-const STAT_LABELS = { goals: 'G', assists: 'A', clean_sheet: 'CS', yellow_cards: 'YC', red_cards: 'RC', saves: 'Sv', bonus: 'Bonus' };
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+// Plain-English line for each part of a stored price move (the keys scoreMatch writes).
+function reasonLabel(key, s, bp) {
+  const n = (k) => s?.[k] ?? 0;
+  switch (key) {
+    case 'appearance': return n('minutes') >= 60 ? `Played ${n('minutes')} minutes` : `Came on for ${plural(n('minutes'), 'minute')}`;
+    case 'did_not_play': return "Didn't play";
+    case 'goals': return n('goals') ? plural(n('goals'), 'goal') : 'Goals';
+    case 'assists': return n('assists') ? plural(n('assists'), 'assist') : 'Assists';
+    case 'clean_sheet': return 'Clean sheet';
+    case 'goals_conceded': return n('goals_conceded') ? `${plural(n('goals_conceded'), 'goal')} conceded` : 'Goals conceded';
+    case 'saves': return n('saves') ? plural(n('saves'), 'save') : 'Saves';
+    case 'penalties_saved': return n('penalties_saved') > 1 ? `${n('penalties_saved')} penalties saved` : 'Penalty saved';
+    case 'penalties_missed': return n('penalties_missed') > 1 ? `${n('penalties_missed')} penalties missed` : 'Penalty missed';
+    case 'yellow_cards': return 'Yellow card';
+    case 'red_cards': return 'Red card';
+    case 'own_goals': return n('own_goals') > 1 ? `${n('own_goals')} own goals` : 'Own goal';
+    case 'bonus': return n('bonus') ? plural(n('bonus'), 'bonus point') : 'Bonus points';
+    case 'defensive_contribution': return n('defensive_contribution') ? `Defensive work (${n('defensive_contribution')} tackles, blocks, etc.)` : 'Defensive work';
+    case 'demand': return bp > 0 ? 'Fans buying his card' : 'Fans selling his card';
+    default: return key.replace(/_/g, ' ');
+  }
+}
+
+// Turns a match's stored breakdown (basis points per reason) into lines in pence
+// that add up exactly to the real price move, including the per-match cap.
+function matchBreakdown(s) {
+  let parts = {};
+  try { parts = JSON.parse(s.reason || '{}'); } catch {}
+  const w = state.config?.weights ?? {};
+  const items = Object.entries(parts).map(([key, bp]) => ({ label: reasonLabel(key, s, bp), bp }));
+  const total = items.reduce((a, i) => a + i.bp, 0);
+  const capped = Math.min(w.maxRise ?? Infinity, Math.max(w.maxFall ?? -Infinity, total));
+  if (capped !== total) items.push({ label: total > 0 ? `Capped at the ${w.maxRise / 100}% max rise per match` : `Capped at the ${-w.maxFall / 100}% max fall per match`, bp: capped - total });
+  // Round each line to whole pence; the odd penny of rounding goes on the biggest
+  // line so the lines add up to the actual move.
+  const pence = items.map((i) => Math.round((s.old_price_pence * i.bp) / 10000));
+  const left = s.new_price_pence - s.old_price_pence - pence.reduce((a, v) => a + v, 0);
+  if (left && pence.length) {
+    const big = pence.reduce((b, v, i) => (Math.abs(v) > Math.abs(pence[b]) ? i : b), 0);
+    pence[big] += left;
+  }
+  return items.map((it, i) => ({ ...it, pence: pence[i] }));
+}
+
+function matchCard(s, p, teamById) {
+  const home = s.team_h === p.team_id;
+  const opp = teamById[home ? s.team_a : s.team_h];
+  const move = s.new_price_pence - s.old_price_pence;
+  const ch = pct(s.new_price_pence, s.old_price_pence);
+  const lines = matchBreakdown(s)
+    .map((l) => `<li><span>${esc(l.label)}</span><span class="muted small">${l.bp > 0 ? '+' : '−'}${Math.abs(l.bp / 100).toFixed(l.bp % 100 ? 2 : 0)}%</span><span class="amt ${cls(l.pence)}">${signedMoney(l.pence)}</span></li>`)
+    .join('');
+  return `<div class="panel tight match">
+    <div class="match-head">
+      <div><span class="who">${img('crest', opp?.code)} ${esc(opp?.name ?? '')} (${home ? 'H' : 'A'}) ${s.team_h_score ?? ''}–${s.team_a_score ?? ''}</span>
+        <div class="small muted">${when(s.kickoff_time)}</div></div>
+      <div class="match-move"><span class="${cls(move)}">${signedMoney(move)}</span> <span class="small ${cls(ch)}">${pctText(ch)}</span>
+        <div class="small muted">${money(s.old_price_pence)} → ${money(s.new_price_pence)}</div></div>
+    </div>
+    <ul class="breakdown">${lines || '<li><span class="muted">No change</span></li>'}</ul>
+  </div>`;
+}
 
 async function playerPage(id) {
   const [d, m] = await Promise.all([api(`/players/${id}`), loadMarket()]);
@@ -508,21 +571,8 @@ async function playerPage(id) {
         <div class="panel tight">${sparkline(prices)}</div>
         ${upcomingFixtures(d.upcoming, p.team_id, m.teamById)}
         <h2>Recent matches</h2>
-        ${
-          d.matches.length
-            ? `<div class="table-wrap"><table><thead><tr><th>Match</th><th class="num">Min</th><th>Key stats</th><th class="num">Price move</th></tr></thead><tbody>
-          ${d.matches
-            .map((s) => {
-              const home = s.team_h === p.team_id;
-              const opp = m.teamById[home ? s.team_a : s.team_h]?.short_name;
-              const key = Object.entries(STAT_LABELS).filter(([k]) => s[k]).map(([k, l]) => `${l}${s[k] > 1 ? '×' + s[k] : ''}`).join(' · ');
-              return `<tr><td>${img('crest', m.teamById[home ? s.team_a : s.team_h]?.code)} ${esc(opp)} (${home ? 'H' : 'A'}) ${s.team_h_score ?? ''}–${s.team_a_score ?? ''}<div class="small muted">${when(s.kickoff_time)}</div></td>
-                <td class="num">${s.minutes}</td><td class="small">${key || '<span class="muted">–</span>'}</td>
-                <td class="num ${cls(s.change_bp)}">${pctText(s.change_bp / 100)}</td></tr>`;
-            })
-            .join('')}</tbody></table></div>`
-            : '<p class="muted">No settled matches yet.</p>'
-        }
+        <p class="small muted">What moved his price in each match.</p>
+        ${d.matches.length ? `<div class="matches">${d.matches.map((s) => matchCard(s, p, m.teamById)).join('')}</div>` : '<p class="muted">No settled matches yet.</p>'}
       </div>
     </div>`;
 

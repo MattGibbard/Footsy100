@@ -203,6 +203,10 @@ describe('trading and settlement', () => {
     // Palmer: +1% app, -2% yellow, +0.04% demand (4 cards) = -0.96%
     expect(prices[200]).toBe(1040);
     expect(prices[300]).toBe(1400); // didn't play yet
+    // The player page lists each settled match with its stat line and per-stat breakdown.
+    const [saka] = (await getPlayer(db, 100, null)).matches as Record<string, unknown>[];
+    expect(saka).toMatchObject({ fixture_id: 1, old_price_pence: 1000, new_price_pence: 1201, minutes: 90, goals: 2, bonus: 3 });
+    expect(JSON.parse(saka.reason as string)).toEqual({ appearance: 100, goals: 1600, bonus: 300, demand: 5 });
     // Form bars get each player's price after his recent matches.
     const { form } = await listPlayers(db);
     expect(JSON.parse(form[100])).toEqual([1201]);
