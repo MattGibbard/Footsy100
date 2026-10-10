@@ -18,6 +18,9 @@
   ],
   // Sync fixtures/players and settle finished matches every 15 minutes
   "observability": { "enabled": true },
+  // Required by `wrangler preview`, which Cloudflare runs for pull request builds.
+  // Previews get no bindings by default, so preview URLs show the front end only.
+  "previews": {},
   "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
     // Resend's shared test sender only delivers to your own Resend account email.
