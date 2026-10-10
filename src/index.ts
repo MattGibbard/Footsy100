@@ -17,7 +17,7 @@ import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLea
 import { activeSeasonId, buy, ensureAccount, getPlayer, listPlayers, portfolio, recentTrades, sell } from './market';
 import { SELL_FEE_BP, STARTING_CASH_PENCE } from './money';
 import { WEIGHTS } from './pricing';
-import { runSync } from './sync';
+import { runSyncRecorded, syncStatus } from './sync';
 
 type App = { Bindings: Env; Variables: { user: SessionUser | null } };
 const app = new Hono<App>().basePath('/api');
@@ -146,12 +146,24 @@ app.post('/leagues/:id/leave', async (c) => {
 app.post('/admin/sync', async (c) => {
   const token = c.env.ADMIN_TOKEN;
   if (!token || c.req.header('Authorization') !== `Bearer ${token}`) throw new HttpError(403, 'Forbidden');
-  return c.json(await runSync(c.env.DB, fplProvider()));
+  try {
+    return c.json({ ok: true, ...(await runSyncRecorded(c.env.DB, fplProvider())) });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+  }
 });
+
+// Public health check: when data last synced and whether it worked.
+app.get('/status', async (c) => c.json(await syncStatus(c.env.DB)));
 
 export default {
   fetch: app.fetch,
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runSync(env.DB, fplProvider()).then((r) => console.log('sync', JSON.stringify(r))));
+    ctx.waitUntil(
+      runSyncRecorded(env.DB, fplProvider()).then(
+        (r) => console.log('sync ok', JSON.stringify(r)),
+        (e) => console.error('sync failed', e),
+      ),
+    );
   },
 } satisfies ExportedHandler<Env>;

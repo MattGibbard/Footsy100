@@ -13,6 +13,33 @@ export interface SyncResult {
   settled: number[];
 }
 
+// Runs the sync and records the outcome, so failures are visible at /api/status.
+export async function runSyncRecorded(db: D1Database, provider: DataProvider, now = new Date()): Promise<SyncResult> {
+  try {
+    const result = await runSync(db, provider, now);
+    await recordSync(db, { at: now.toISOString(), ok: true, result });
+    return result;
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    await recordSync(db, { at: now.toISOString(), ok: false, error }).catch(() => {});
+    throw e;
+  }
+}
+
+async function recordSync(db: D1Database, outcome: object) {
+  await db.prepare(`INSERT OR REPLACE INTO sync_state (key, value) VALUES ('last_sync', ?)`).bind(JSON.stringify(outcome)).run();
+}
+
+export async function syncStatus(db: D1Database) {
+  const [last, players, fixtures, season] = await Promise.all([
+    db.prepare(`SELECT value FROM sync_state WHERE key = 'last_sync'`).first<string>('value'),
+    db.prepare('SELECT COUNT(*) AS n FROM players').first<number>('n'),
+    db.prepare('SELECT COUNT(*) AS n FROM fixtures').first<number>('n'),
+    db.prepare('SELECT name FROM seasons WHERE active = 1').first<string>('name'),
+  ]);
+  return { last_sync: last ? JSON.parse(last) : null, players, fixtures, season };
+}
+
 export async function runSync(db: D1Database, provider: DataProvider, now = new Date()): Promise<SyncResult> {
   const season = await provider.getSeasonName();
   await ensureSeason(db, season);

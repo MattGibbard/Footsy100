@@ -52,8 +52,16 @@ document.addEventListener('click', (e) => {
 });
 window.addEventListener('popstate', route);
 
+function emptyMarketText() {
+  const s = state.status?.last_sync;
+  if (!s) return 'Player data hasn\'t loaded yet. The first sync runs within 15 minutes of deploying.';
+  if (!s.ok) return `Player data couldn't be loaded. Last sync failed ${esc(when(s.at))}: ${esc(s.error)}`;
+  return 'Player data hasn\'t loaded yet.';
+}
+
 async function loadMarket(force = false) {
   if (!state.market || force) state.market = await api('/players');
+  if (!state.market.players.length) state.status = await api('/status').catch(() => null);
   const m = state.market;
   m.teamById = Object.fromEntries(m.teams.map((t) => [t.id, t]));
   m.locked = new Set(m.locked_teams);
@@ -117,7 +125,7 @@ async function marketPage() {
             <td class="hide-sm">${m.locked.has(p.team_id) ? '<span class="badge lock">Locked</span> ' : ''}<span class="small">${opp}</span></td>
           </tr>`;
         })
-        .join('') || `<tr><td colspan="6" class="empty">No players found${m.players.length ? '' : '. The first data sync hasn\'t run yet'}.</td></tr>`;
+        .join('') || `<tr><td colspan="6" class="empty">${m.players.length ? 'No players found.' : emptyMarketText()}</td></tr>`;
   };
   draw();
 
