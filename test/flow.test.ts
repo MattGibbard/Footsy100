@@ -256,10 +256,19 @@ describe('trading and settlement', () => {
     expect(calls).toEqual([8]);
     expect((await listFixtures(db)).fixtures[0]).toMatchObject({ started: 1, finished: 0, finished_provisional: 0, team_h_score: 3, team_a_score: 1 });
 
-    // Final whistle: FPL marks it provisionally finished, but prices wait for the confirmed stats.
+    // Final whistle: FPL marks it provisionally finished, but prices wait a little for bonus points.
     Object.assign(provider.fixtures[0], { finished_provisional: true });
     await runLiveScores(db, provider);
     expect((await listFixtures(db)).fixtures[0]).toMatchObject({ finished: 0, finished_provisional: 1 });
+    expect((await runSync(db, provider)).settled).toEqual([]);
+
+    // FPL can take hours to confirm the match, so 2.5h after kick-off it settles anyway...
+    provider.fixtures[0].kickoff_time = iso(Date.now() - 2.6 * HOUR);
+    expect((await runSync(db, provider)).settled).toEqual([1]);
+    expect((await listPlayers(db)).locked_teams).toEqual([]);
+
+    // ...and prices don't move again when FPL finally marks it finished.
+    provider.fixtures[0].finished = true;
     expect((await runSync(db, provider)).settled).toEqual([]);
   });
 

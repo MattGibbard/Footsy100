@@ -320,7 +320,7 @@ async function playerPage(id) {
   if (d.locked) {
     const why = {
       live: 'His match is being played right now. Trading reopens once the final stats are in and his new price is set.',
-      awaiting: 'His match has finished. Trading reopens once the final stats are in and his new price is set, usually about an hour after full time.',
+      awaiting: 'His match has finished. Trading reopens once the final stats are in and his new price is set, usually within about half an hour of full time.',
     }[d.match_state] ?? `His team kicks off ${when(d.locked_kickoff)}. Trading reopens once the match has been played and prices are settled.`;
     box.innerHTML = `<h2 style="margin-top:0">Trading locked</h2><p class="muted">${why}</p>`;
     return;

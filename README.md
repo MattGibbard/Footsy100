@@ -8,7 +8,7 @@ A footballer stock exchange played with fake money. Everyone starts the season w
 ## Game rules
 - New accounts get £100 per season. Fractional shares are allowed and the minimum trade is 10p.
 - Starting prices come from FPL prices: a £5.5m FPL player lists at £5.50.
-- Trading on a player locks **2 hours before his team kicks off** and reopens once FPL marks the match finished, which is when bonus points are confirmed and we settle prices.
+- Trading on a player locks **2 hours before his team kicks off** and reopens once we settle prices: when FPL marks the match finished, or 2.5 hours after kick-off if FPL has the match at full time (bonus points are in by then, but FPL's final "finished" flag can take until the end of the day).
 - Settlement moves each player's price by the weights in `src/pricing.ts` (goals, assists, clean sheets, cards, saves, bonus, defensive contributions, minutes). A player who doesn't feature drifts down 1%. Net buying or selling since his last match adds a small nudge, capped at ±3%. A single match move is capped at −25% / +40%.
 - Selling costs a 2% fee.
 - Leaderboards rank by total value (cash plus holdings at current prices). When a new season appears in the FPL data, final values are frozen into an all-time table, prices reset to FPL prices, and everyone restarts at £100.

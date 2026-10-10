@@ -9,6 +9,10 @@ const PLAYER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // A match counts as live from kick-off until FPL marks it finished (which waits
 // for bonus points, so it can be an hour after the final whistle).
 const LIVE_WINDOW_MS = 3 * 60 * 60 * 1000;
+// FPL only marks a match finished once its data is checked, which can be hours
+// after full time (often the end of the day). Its stats and bonus points are in
+// well before that, so settle a provisionally finished match once it is this old.
+const SETTLE_AFTER_KICKOFF_MS = 150 * 60 * 1000;
 // Settling is the one step that parses JSON in the Worker, so cap it per run.
 const MAX_SETTLEMENTS_PER_RUN = 2;
 
@@ -84,10 +88,12 @@ export async function runSync(db: D1Database, provider: DataProvider, now = new 
 
   const due = await db
     .prepare(
-      `SELECT id, event, team_h, team_a FROM fixtures WHERE finished = 1 AND settled_at IS NULL AND event IS NOT NULL
-       ORDER BY kickoff_time LIMIT ?`,
+      `SELECT id, event, team_h, team_a FROM fixtures
+       WHERE settled_at IS NULL AND event IS NOT NULL
+         AND (finished = 1 OR (finished_provisional = 1 AND kickoff_time <= ?1))
+       ORDER BY kickoff_time LIMIT ?2`,
     )
-    .bind(MAX_SETTLEMENTS_PER_RUN)
+    .bind(new Date(now.getTime() - SETTLE_AFTER_KICKOFF_MS).toISOString().slice(0, 19) + 'Z', MAX_SETTLEMENTS_PER_RUN)
     .all<DueFixture>();
   const settled: number[] = [];
   for (const f of due.results) {
