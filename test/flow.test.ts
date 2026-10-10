@@ -30,7 +30,7 @@ function fakeProvider() {
   ];
   const stats = new Map<number, MatchStats>();
   const el = (id: number, first: string, second: string, team: number, type: number, cost: number) => ({
-    can_transact: true, id, first_name: first, second_name: second, web_name: second, team, element_type: type, status: 'a', now_cost: cost,
+    can_transact: true, code: 50000 + id, id, first_name: first, second_name: second, web_name: second, team, element_type: type, status: 'a', now_cost: cost,
   });
   const provider: DataProvider & { fixtures: FakeFixture[]; stats: Map<number, MatchStats> } = {
     fixtures,
@@ -109,6 +109,8 @@ describe('trading and settlement', () => {
   it('seeds players at provider prices with £100 accounts', async () => {
     const m = await listPlayers(db);
     expect(m.players).toHaveLength(4);
+    expect(m.players.find((p) => p.id === 100)).toMatchObject({ code: 50100 });
+    expect(m.teams.find((t) => t.id === 1)).toMatchObject({ code: 3 });
     expect((await portfolio(db, alice)).cash_pence).toBe(10_000);
     expect(m.next_fixtures[1]).toMatchObject({ opponent: 2, home: true });
     expect(m.locked_teams).toEqual([]);
