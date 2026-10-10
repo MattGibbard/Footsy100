@@ -94,12 +94,28 @@ function emptyMarketText() {
 }
 
 async function loadMarket(force = false) {
-  if (!state.market || force) state.market = await api('/players');
+  // Refetch after a minute so match badges (locked, playing, awaiting price) stay current.
+  if (!state.market || force || Date.now() - state.market.loadedAt > 60_000) {
+    state.market = await api('/players');
+    state.market.loadedAt = Date.now();
+  }
   if (!state.market.players.length) state.status = await api('/status').catch(() => null);
   const m = state.market;
   m.teamById = Object.fromEntries(m.teams.map((t) => [t.id, t]));
   m.locked = new Set(m.locked_teams);
+  m.teamState = m.team_states ?? {};
   return m;
+}
+
+// Why a player can't be traded right now: about to kick off, mid-match, or waiting for his new price.
+const MATCH_STATES = {
+  locked: { label: 'Locked', cls: 'lock', title: 'His match kicks off soon, so trading is paused' },
+  live: { label: 'Playing now', cls: 'live', title: 'His match is under way. Trading reopens once his new price is set.' },
+  awaiting: { label: 'Awaiting new price', cls: 'lock', title: 'Full time. His new price is set once the final stats are in.' },
+};
+function matchBadge(state, extra = '') {
+  const s = MATCH_STATES[state];
+  return s ? `<span class="badge ${s.cls} ${extra}" title="${s.title}">${s.label}</span>` : '';
 }
 
 function renderAccount() {
@@ -152,12 +168,12 @@ async function marketPage() {
           const nf = m.next_fixtures[p.team_id];
           const opp = nf ? `${esc(m.teamById[nf.opponent]?.short_name)} (${nf.home ? 'H' : 'A'}) · ${when(nf.kickoff_time)}` : '<span class="muted">None</span>';
           return `<tr class="clickable" data-id="${p.id}">
-            <td><span class="who">${img('photo', p.code)}<span><b>${esc(p.web_name)}</b>${p.status !== 'a' ? ' <span class="badge" title="Availability flag from FPL">!</span>' : ''}${m.locked.has(p.team_id) ? ' <span class="badge lock show-sm">Locked</span>' : ''}</span></span></td>
+            <td><span class="who">${img('photo', p.code)}<span><b>${esc(p.web_name)}</b>${p.status !== 'a' ? ' <span class="badge" title="Availability flag from FPL">!</span>' : ''}${m.teamState[p.team_id] ? ' ' + matchBadge(m.teamState[p.team_id], 'show-sm') : ''}</span></span></td>
             <td><span class="who">${img('crest', m.teamById[p.team_id]?.code)}${esc(m.teamById[p.team_id]?.short_name)}</span></td>
             <td><span class="badge pos">${p.position}</span></td>
             <td class="num">${money(p.price_pence)}</td>
             <td class="num ${cls(ch)}">${p.prev_price_pence ? pctText(ch) : '–'}</td>
-            <td class="hide-sm">${m.locked.has(p.team_id) ? '<span class="badge lock">Locked</span> ' : ''}<span class="small">${opp}</span></td>
+            <td class="hide-sm">${m.teamState[p.team_id] ? matchBadge(m.teamState[p.team_id]) + ' ' : ''}<span class="small">${opp}</span></td>
           </tr>`;
         })
         .join('') || `<tr><td colspan="6" class="empty">${m.players.length ? 'No players found.' : emptyMarketText()}</td></tr>`;
@@ -233,7 +249,7 @@ function upcomingFixtures(list, teamId, teamById) {
     <div class="card next-match">
       <div class="nm-teams"><span class="who">${img('crest', teamById[next.team_h]?.code)}${esc(teamById[next.team_h]?.name)}</span> <span class="muted">v</span> <span class="who">${img('crest', teamById[next.team_a]?.code)}${esc(teamById[next.team_a]?.name)}</span></div>
       <div class="muted">${n.home ? 'Home' : 'Away'} vs ${esc(n.opp?.name)}${next.event ? ` · Gameweek ${next.event}` : ''}</div>
-      <div class="nm-when">${next.finished_provisional ? '<span class="badge lock">Full time, waiting for final stats</span>' : next.started ? '<span class="badge lock">In play</span>' : when(next.kickoff_time)}</div>
+      <div class="nm-when">${next.finished_provisional ? '<span class="badge lock">Full time, waiting for final stats</span>' : next.started ? '<span class="badge live">Playing now</span>' : when(next.kickoff_time)}</div>
       ${lockAt && !next.started ? `<div class="small muted">Trading on him locks ${when(lockAt)}</div>` : ''}
     </div>
     ${
@@ -264,6 +280,7 @@ async function playerPage(id) {
       <div>
         <h1>${esc(p.first_name)} ${esc(p.second_name)}</h1>
         <p class="muted who">${img('crest', p.team_code)}${esc(p.team_name)} · ${p.position}</p>
+        ${d.match_state ? `<p>${matchBadge(d.match_state)}</p>` : ''}
       </div>
     </div>
     <div class="grid grid-2">
@@ -301,7 +318,11 @@ async function playerPage(id) {
     return;
   }
   if (d.locked) {
-    box.innerHTML = `<h2 style="margin-top:0">Trading locked</h2><p class="muted">His team kicks off ${when(d.locked_kickoff)}. Trading reopens once the match has been played and prices are settled.</p>`;
+    const why = {
+      live: 'His match is being played right now. Trading reopens once the final stats are in and his new price is set.',
+      awaiting: 'His match has finished. Trading reopens once the final stats are in and his new price is set, usually about an hour after full time.',
+    }[d.match_state] ?? `His team kicks off ${when(d.locked_kickoff)}. Trading reopens once the match has been played and prices are settled.`;
+    box.innerHTML = `<h2 style="margin-top:0">Trading locked</h2><p class="muted">${why}</p>`;
     return;
   }
   const pf = await api('/portfolio').catch(() => null);
@@ -375,7 +396,7 @@ async function portfolioPage() {
         .map((h) => {
           const gain = h.value_pence - h.cost_pence;
           return `<tr class="clickable" onclick="history.pushState(null,'','/player/${h.player_id}');dispatchEvent(new PopStateEvent('popstate'))">
-            <td><span class="who">${img('photo', h.code)}<span><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span></span></span></td>
+            <td><span class="who">${img('photo', h.code)}<span><b>${esc(h.web_name)}</b> <span class="small muted">${esc(h.team_short)} · ${h.position}</span>${h.match_state ? ' ' + matchBadge(h.match_state) : ''}</span></span></td>
             <td class="num">${shares(h.shares_micro)}</td><td class="num">${money(h.price_pence)}</td>
             <td class="num">${money(h.value_pence)}</td><td class="num ${cls(gain)}">${gain >= 0 ? '+' : ''}${money(gain)}</td></tr>`;
         })

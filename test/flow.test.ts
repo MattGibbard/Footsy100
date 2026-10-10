@@ -162,9 +162,24 @@ describe('trading and settlement', () => {
     provider.fixtures[0].kickoff_time = iso(Date.now() + 1.5 * HOUR);
     await runSync(db, provider);
     expect((await listPlayers(db)).locked_teams.sort()).toEqual([1, 2]);
+    expect((await listPlayers(db)).team_states).toEqual({ 1: 'locked', 2: 'locked' });
+    expect((await getPlayer(db, 100, null)).match_state).toBe('locked');
     await expect(buy(db, alice, 100, 100)).rejects.toThrow('locked');
     await expect(sell(db, alice, 100, null)).rejects.toThrow('locked');
     await buy(db, alice, 300, 100); // Liverpool still tradable
+
+    // Kicked off: shown as playing, on the market and in portfolios.
+    provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 0.5 * HOUR), started: true };
+    await runSync(db, provider);
+    expect((await listPlayers(db)).team_states).toEqual({ 1: 'live', 2: 'live' });
+    const live = await portfolio(db, alice);
+    expect(Object.fromEntries(live.holdings.map((h) => [h.player_id, h.match_state]))).toEqual({ 100: 'live', 300: null });
+
+    // Full time but stats not final: awaiting the new price.
+    provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 2 * HOUR), finished_provisional: true };
+    await runSync(db, provider);
+    expect((await getPlayer(db, 100, null)).match_state).toBe('awaiting');
+    await expect(buy(db, alice, 100, 100)).rejects.toThrow('locked');
 
     // Match finishes: Saka scores twice, Raya concedes 2, Palmer is booked.
     provider.fixtures[0] = { ...provider.fixtures[0], kickoff_time: iso(Date.now() - 2 * HOUR), started: true, finished: true, team_h_score: 2, team_a_score: 2 };
