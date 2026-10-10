@@ -23,10 +23,10 @@
   "previews": {},
   "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
-    // Resend's shared test sender only delivers to your own Resend account email.
-    // Verify a domain in Resend and change this to send to everyone.
-    "EMAIL_FROM": "Footsy100 <onboarding@resend.dev>",
     "DEV_MODE": "false"
-  }
-  // Secrets (set with `wrangler secret put`): RESEND_API_KEY, ADMIN_TOKEN
+  },
+  // Keep variables set in the dashboard (like EMAIL_FROM) when Git builds redeploy.
+  "keep_vars": true
+  // Set in the dashboard: EMAIL_FROM (variable), RESEND_API_KEY and ADMIN_TOKEN (secrets).
+  // Without EMAIL_FROM, mail goes from Resend's test sender, which only delivers to your own Resend account email.
 }

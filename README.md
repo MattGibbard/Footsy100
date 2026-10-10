@@ -30,8 +30,11 @@ To pull FPL data locally, add `ADMIN_TOKEN="something"` to `.dev.vars` and run
 In Cloudflare's Git build settings, set the deploy command to `npm run deploy`. That deploys the Worker, which creates the `footsy100` D1 database on the first run, and then applies any new migrations.
 
 Then set two secrets in the dashboard (Worker > Settings > Variables and Secrets) or with `npx wrangler secret put`:
-- `RESEND_API_KEY`: from resend.com. Until you verify a domain there, `EMAIL_FROM` stays on Resend's test sender, which only delivers to your own Resend account email.
+- `RESEND_API_KEY`: from resend.com. It must come from the same Resend account that verified your sending domain.
 - `ADMIN_TOKEN`: any long random string.
+
+And one plain variable (type Text) on the same page:
+- `EMAIL_FROM`: the sender, such as `Footsy100 <footsy100@yourdomain.com>`. The domain must be verified in Resend, and any domain you already verified there works, even one used by another project. Without it, mail goes from Resend's test sender, which only delivers to your own Resend account email. `keep_vars` in `wrangler.jsonc` stops deploys from wiping it.
 
 Finally, trigger the first data sync so players load straight away:
 `curl -X POST https://footsy100.<you>.workers.dev/api/admin/sync -H "Authorization: Bearer <ADMIN_TOKEN>"`

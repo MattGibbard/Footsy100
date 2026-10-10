@@ -56,7 +56,7 @@ export async function requestLoginLink(env: Env, email: string, origin: string):
     method: 'POST',
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: env.EMAIL_FROM,
+      from: env.EMAIL_FROM || 'Footsy100 <onboarding@resend.dev>',
       to: [email],
       subject: 'Your Footsy100 sign-in link',
       text: `Sign in to Footsy100:\n\n${link}\n\nThis link expires in 15 minutes. If you didn't ask for it, ignore this email.`,
