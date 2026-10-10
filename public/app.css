@@ -92,6 +92,21 @@ tr:last-child td { border-bottom: 0; }
 .code { font-family: ui-monospace, monospace; letter-spacing: 0.12em; font-size: 18px; color: var(--accent); }
 .weights td:last-child { text-align: right; }
 
+.next-match .nm-teams { font-size: 18px; font-weight: 600; }
+.next-match .nm-when { font-size: 16px; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
+.coming-up { margin-top: 10px; }
+
+.seg select { border: 0; border-radius: 0; background: transparent; }
+.seg[hidden] { display: none; }
+.fx-day { font-size: 14px; color: var(--muted); font-weight: 500; margin: 20px 0 8px; }
+#fx-list { max-width: 760px; }
+.fx-card { padding: 0; }
+.fx-row { display: grid; grid-template-columns: 1fr 96px 1fr; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.fx-row:last-child { border-bottom: 0; }
+.fx-team { display: block; color: var(--text); font-weight: 500; }
+.fx-team.home { text-align: right; }
+.fx-mid { text-align: center; font-variant-numeric: tabular-nums; }
+
 .show-sm { display: none; }
 @media (max-width: 640px) {
   .hide-sm { display: none; }

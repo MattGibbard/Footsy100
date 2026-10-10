@@ -156,6 +156,36 @@ function sparkline(points) {
     <path class="area" d="${line}L${w - pad},${h}L${pad},${h}Z"/><path class="line" d="${line}"/></svg>`;
 }
 
+// Next match card plus the few after it, for a player's team.
+function upcomingFixtures(list, teamId, teamById) {
+  if (!list.length) return '<h2>Next match</h2><p class="muted">No upcoming matches scheduled.</p>';
+  const [next, ...rest] = list;
+  const vs = (f) => {
+    const home = f.team_h === teamId;
+    return { opp: teamById[home ? f.team_a : f.team_h], home };
+  };
+  const n = vs(next);
+  const lockAt = next.kickoff_time ? new Date(new Date(next.kickoff_time).getTime() - (state.market?.lock_hours ?? 2) * 3_600_000).toISOString() : null;
+  return `
+    <h2>Next match</h2>
+    <div class="card next-match">
+      <div class="nm-teams">${esc(teamById[next.team_h]?.name)} <span class="muted">v</span> ${esc(teamById[next.team_a]?.name)}</div>
+      <div class="muted">${n.home ? 'Home' : 'Away'} vs ${esc(n.opp?.name)}${next.event ? ` · Gameweek ${next.event}` : ''}</div>
+      <div class="nm-when">${next.started ? '<span class="badge lock">In play</span>' : when(next.kickoff_time)}</div>
+      ${lockAt && !next.started ? `<div class="small muted">Trading on him locks ${when(lockAt)}</div>` : ''}
+    </div>
+    ${
+      rest.length
+        ? `<div class="table-wrap coming-up"><table><tbody>${rest
+            .map((f) => {
+              const v = vs(f);
+              return `<tr><td>${esc(v.opp?.name)} (${v.home ? 'H' : 'A'})</td><td class="small muted">${f.event ? `GW${f.event}` : ''}</td><td class="num small">${when(f.kickoff_time)}</td></tr>`;
+            })
+            .join('')}</tbody></table></div>`
+        : ''
+    }`;
+}
+
 const STAT_LABELS = { goals: 'G', assists: 'A', clean_sheet: 'CS', yellow_cards: 'YC', red_cards: 'RC', saves: 'Sv', bonus: 'Bonus' };
 
 async function playerPage(id) {
@@ -164,12 +194,11 @@ async function playerPage(id) {
   const ch = pct(p.price_pence, p.prev_price_pence);
   const prices = d.history.length ? [d.history[d.history.length - 1].old_price_pence, ...d.history.slice().reverse().map((h) => h.new_price_pence)] : [];
   const feePct = (state.config?.sell_fee_bp ?? 200) / 100;
-  const nf = m.next_fixtures[p.team_id];
 
   app.innerHTML = `
     <p><a href="/" data-link>← Market</a></p>
     <h1>${esc(p.first_name)} ${esc(p.second_name)}</h1>
-    <p class="muted">${esc(p.team_name)} · ${p.position}${nf ? ` · Next: ${esc(m.teamById[nf.opponent]?.name)} (${nf.home ? 'H' : 'A'}) ${when(nf.kickoff_time)}` : ''}</p>
+    <p class="muted">${esc(p.team_name)} · ${p.position}</p>
     <div class="grid grid-2">
       <div>
         <div class="stats">
@@ -178,6 +207,7 @@ async function playerPage(id) {
           ${d.holding ? `<div class="stat"><div class="label">You own</div><div class="value">${shares(d.holding.shares_micro)}</div><div class="small muted">worth ${money(Math.floor((d.holding.shares_micro * p.price_pence) / MICRO))}</div></div>` : ''}
         </div>
         <div class="card">${sparkline(prices)}</div>
+        ${upcomingFixtures(d.upcoming, p.team_id, m.teamById)}
         <h2>Recent matches</h2>
         ${
           d.matches.length
@@ -297,6 +327,80 @@ async function portfolioPage() {
         .join('')}</tbody></table></div>`
         : '<p class="muted">No trades yet.</p>'
     }`;
+}
+
+async function fixturesPage() {
+  const d = await api('/fixtures');
+  const teamById = Object.fromEntries(d.teams.map((t) => [t.id, t]));
+  const locked = new Set(d.locked_teams);
+  const events = [...new Set(d.fixtures.map((f) => f.event).filter((e) => e != null))].sort((a, b) => a - b);
+  const prefs = (fixturesPage.prefs ??= { event: null, team: '' });
+  if (prefs.event == null || !events.includes(prefs.event)) prefs.event = d.current_event ?? events[events.length - 1] ?? null;
+
+  app.innerHTML = `
+    <h1>Fixtures</h1>
+    <p class="muted">Premier League fixtures and results. Times are shown in your time zone. Click a team to see its players.</p>
+    <div class="toolbar">
+      <select id="fx-team"><option value="">All teams</option>${d.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
+      <div class="seg" id="gw-nav"><button id="gw-prev" aria-label="Previous gameweek">‹</button><select id="gw">${events.map((e) => `<option value="${e}" ${e === prefs.event ? 'selected' : ''}>Gameweek ${e}</option>`).join('')}</select><button id="gw-next" aria-label="Next gameweek">›</button></div>
+    </div>
+    <div id="fx-list"></div>`;
+
+  const row = (f) => {
+    const live = f.started && !f.finished;
+    const mid = f.finished || live ? `<b>${f.team_h_score ?? 0} – ${f.team_a_score ?? 0}</b>` : f.kickoff_time ? new Date(f.kickoff_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'TBC';
+    // Locks by team are for trading; only flag the match that is actually causing the lock.
+    const lockedNow = !f.finished && f.kickoff_time && new Date(f.kickoff_time).getTime() - Date.now() <= d.lock_hours * 3_600_000 && (locked.has(f.team_h) || locked.has(f.team_a));
+    const team = (id, side) => `<a href="/" class="fx-team ${side}" data-team="${id}"><span class="hide-sm">${esc(teamById[id]?.name)}</span><span class="show-sm">${esc(teamById[id]?.short_name)}</span></a>`;
+    return `<div class="fx-row">
+      ${team(f.team_h, 'home')}
+      <div class="fx-mid">${mid}${live ? '<div class="small up">Live</div>' : f.finished ? '<div class="small muted">FT</div>' : lockedNow ? '<div><span class="badge lock">Locked</span></div>' : ''}</div>
+      ${team(f.team_a, 'away')}
+    </div>`;
+  };
+  const dayKey = (f) =>
+    f.kickoff_time ? new Date(f.kickoff_time).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Date to be confirmed';
+
+  const draw = () => {
+    const teamId = Number(prefs.team);
+    let list;
+    if (teamId) {
+      list = d.fixtures.filter((f) => !f.finished && (f.team_h === teamId || f.team_a === teamId));
+    } else {
+      list = d.fixtures.filter((f) => f.event === prefs.event);
+    }
+    document.getElementById('gw-nav').hidden = !!teamId;
+    const groups = [];
+    for (const f of list) {
+      const k = (teamId && f.event ? `Gameweek ${f.event} · ` : '') + dayKey(f);
+      if (groups.at(-1)?.k !== k) groups.push({ k, rows: [] });
+      groups.at(-1).rows.push(f);
+    }
+    document.getElementById('fx-list').innerHTML = groups.length
+      ? groups.map((g) => `<h2 class="fx-day">${esc(g.k)}</h2><div class="card fx-card">${g.rows.map(row).join('')}</div>`).join('')
+      : `<div class="card empty">${d.fixtures.length ? 'No upcoming fixtures.' : "Fixtures haven't loaded yet."}</div>`;
+    const i = events.indexOf(prefs.event);
+    document.getElementById('gw-prev').disabled = i <= 0;
+    document.getElementById('gw-next').disabled = i < 0 || i >= events.length - 1;
+  };
+  draw();
+
+  const setEvent = (e) => {
+    prefs.event = e;
+    document.getElementById('gw').value = String(e);
+    draw();
+  };
+  document.getElementById('gw').addEventListener('change', (e) => setEvent(Number(e.target.value)));
+  document.getElementById('gw-prev').addEventListener('click', () => setEvent(events[events.indexOf(prefs.event) - 1]));
+  document.getElementById('gw-next').addEventListener('click', () => setEvent(events[events.indexOf(prefs.event) + 1]));
+  document.getElementById('fx-team').addEventListener('change', (e) => ((prefs.team = e.target.value), draw()));
+  document.getElementById('fx-list').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-team]');
+    if (!a) return;
+    e.preventDefault();
+    marketPage.prefs = { ...(marketPage.prefs ?? { q: '', pos: '', sort: 'price', dir: -1 }), team: a.dataset.team, q: '' };
+    navigate('/');
+  });
 }
 
 function standingsTable(rows, scope) {
@@ -493,6 +597,7 @@ async function route() {
     let m;
     if (path === '/') await marketPage();
     else if ((m = path.match(/^\/player\/(\d+)$/))) await playerPage(m[1]);
+    else if (path === '/fixtures') await fixturesPage();
     else if (path === '/portfolio') await portfolioPage();
     else if (path === '/leaderboard') await leaderboardPage();
     else if (path === '/leagues') await leaguesPage();

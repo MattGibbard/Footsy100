@@ -14,7 +14,7 @@ import {
 import type { Env } from './env';
 import { fplProvider } from './fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues, type Scope } from './leagues';
-import { activeSeasonId, buy, ensureAccount, getPlayer, listPlayers, portfolio, recentTrades, sell } from './market';
+import { activeSeasonId, buy, ensureAccount, getPlayer, listFixtures, listPlayers, portfolio, recentTrades, sell } from './market';
 import { SELL_FEE_BP, STARTING_CASH_PENCE } from './money';
 import { WEIGHTS } from './pricing';
 import { runSyncRecorded, syncStatus } from './sync';
@@ -108,6 +108,8 @@ app.get('/config', (c) =>
 app.get('/players', async (c) => c.json(await listPlayers(c.env.DB)));
 
 app.get('/players/:id', async (c) => c.json(await getPlayer(c.env.DB, intParam(c.req.param('id')), c.get('user')?.id ?? null)));
+
+app.get('/fixtures', async (c) => c.json(await listFixtures(c.env.DB)));
 
 app.get('/portfolio', async (c) => c.json(await portfolio(c.env.DB, requireUser(c).id)));
 
