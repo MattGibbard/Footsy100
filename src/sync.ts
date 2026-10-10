@@ -23,6 +23,7 @@ export interface SyncResult {
   playersSynced: boolean;
   fixtures: number;
   settled: number[];
+  snapshotted: boolean;
 }
 
 // Runs the sync and records the outcome, so failures are visible at /api/status.
@@ -102,7 +103,31 @@ export async function runSync(db: D1Database, provider: DataProvider, now = new 
     settled.push(f.id);
   }
 
-  return { season, playersSynced: playersDue, fixtures, settled };
+  await stage('snapshotting portfolios');
+  const snapshotted = await snapshotPortfolios(db, now);
+
+  return { season, playersSynced: playersDue, fixtures, settled, snapshotted };
+}
+
+// Once a UTC day, record every account's total value (cash + cards) for the
+// portfolio chart. One INSERT ... SELECT, so it costs the Worker almost no CPU.
+export async function snapshotPortfolios(db: D1Database, now: Date): Promise<boolean> {
+  const day = now.toISOString().slice(0, 10);
+  const last = await db.prepare(`SELECT value FROM sync_state WHERE key = 'snapshot_day'`).first<string>('value');
+  if (last === day) return false;
+  await db.batch([
+    db
+      .prepare(
+        `INSERT OR REPLACE INTO portfolio_snapshots (user_id, season_id, day, value_pence)
+         SELECT a.user_id, a.season_id, ?1, a.cash_pence + COALESCE(
+           (SELECT SUM(h.cards * p.price_pence) FROM holdings h JOIN players p ON p.id = h.player_id
+            WHERE h.user_id = a.user_id AND h.season_id = a.season_id), 0)
+         FROM accounts a JOIN seasons s ON s.id = a.season_id WHERE s.active = 1`,
+      )
+      .bind(day),
+    db.prepare(`INSERT OR REPLACE INTO sync_state (key, value) VALUES ('snapshot_day', ?)`).bind(day),
+  ]);
+  return true;
 }
 
 // The cron fires every minute but only does the full sync every 15 minutes. In
@@ -188,14 +213,14 @@ async function syncTeamsAndPlayers(db: D1Database, bootstrap: string, resetPrice
     stmts.push(
       db
         .prepare(
-          `INSERT INTO players (id, code, first_name, second_name, web_name, team_id, position, status, price_pence)
+          `INSERT INTO players (id, code, first_name, second_name, web_name, team_id, position, status, news, news_added, chance_next, price_pence)
            SELECT v ->> 'id', v ->> 'code', v ->> 'first_name', v ->> 'second_name', v ->> 'web_name', v ->> 'team',
              CASE v ->> 'element_type' WHEN 1 THEN 'GKP' WHEN 2 THEN 'DEF' WHEN 3 THEN 'MID' ELSE 'FWD' END,
-             v ->> 'status', (v ->> 'now_cost') * 10
+             v ->> 'status', COALESCE(v ->> 'news', ''), v ->> 'news_added', v ->> 'chance_of_playing_next_round', (v ->> 'now_cost') * 10
            FROM (SELECT j.value AS v FROM json_each(?) j) WHERE (v ->> 'element_type') BETWEEN 1 AND 4
            ON CONFLICT(id) DO UPDATE SET code = excluded.code, first_name = excluded.first_name, second_name = excluded.second_name,
              web_name = excluded.web_name, team_id = excluded.team_id, position = excluded.position,
-             status = excluded.status
+             status = excluded.status, news = excluded.news, news_added = excluded.news_added, chance_next = excluded.chance_next
              ${resetPrices ? ', price_pence = excluded.price_pence, prev_price_pence = NULL' : ''}`,
         )
         .bind(chunk),

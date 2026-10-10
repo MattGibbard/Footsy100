@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { emptyStats, type DataProvider } from '../src/fpl';
 import { createLeague, joinLeague, leaderboard, leagueDetail, leaveLeague, myLeagues } from '../src/leagues';
+import { openPack, packStatus, rollBand } from '../src/packs';
 import { buy, getPlayer, listFixtures, listPlayers, portfolio, sell, topMovers } from '../src/market';
 import type { MatchStats } from '../src/pricing';
-import { runLiveScores, runSync } from '../src/sync';
+import { runLiveScores, runSync, snapshotPortfolios } from '../src/sync';
 import { createD1 } from './d1shim';
 
 const HOUR = 3_600_000;
@@ -50,7 +51,7 @@ function fakeProvider() {
         elements: [
           el(100, 'Bukayo', 'Saka', 1, 3, 100),
           el(101, 'David', 'Raya', 1, 1, 55),
-          el(200, 'Cole', 'Palmer', 2, 3, 105),
+          { ...el(200, 'Cole', 'Palmer', 2, 3, 105), status: 'd', news: 'Knock - 75% chance of playing', news_added: '2026-10-09T10:00:00Z', chance_of_playing_next_round: 75 },
           el(300, 'Mohamed', 'Salah', 3, 3, 140),
           { ...el(999, 'Mikel', 'Arteta', 1, 5, 15) }, // managers (type 5) are skipped
         ],
@@ -307,5 +308,64 @@ describe('trading and settlement', () => {
     const allTime = await leaderboard(db, 'alltime');
     expect(allTime.find((r) => r.user_id === alice)?.total_pence).toBe(5000); // £50 profit last season
     expect(allTime.find((r) => r.user_id === bob)?.total_pence).toBe(0);
+  });
+
+  it("stores FPL's injury news on players", async () => {
+    const palmer = (await listPlayers(db)).players.find((p) => p.id === 200);
+    expect(palmer).toMatchObject({ status: 'd', news: 'Knock - 75% chance of playing', chance_next: 75 });
+    expect((await listPlayers(db)).players.find((p) => p.id === 100)).toMatchObject({ news: '', chance_next: null });
+  });
+
+  it('snapshots every account once a day for the value chart', async () => {
+    await buy(db, alice, 100, 2);
+    await portfolio(db, bob);
+    const day1 = new Date('2026-10-11T00:05:00Z');
+    expect(await snapshotPortfolios(db, day1)).toBe(true);
+    expect(await snapshotPortfolios(db, new Date('2026-10-11T12:00:00Z'))).toBe(false); // once a day
+    await db.prepare('UPDATE players SET price_pence = 1500 WHERE id = 100').run();
+    expect(await snapshotPortfolios(db, new Date('2026-10-12T00:05:00Z'))).toBe(true);
+    const pf = await portfolio(db, alice);
+    expect(pf.history).toEqual([
+      { day: '2026-10-11', value_pence: 10_000 },
+      { day: '2026-10-12', value_pence: 11_000 },
+    ]);
+    expect((await portfolio(db, bob)).history).toHaveLength(2);
+  });
+
+  it('sells one paid pack per gameweek with a random card from the rolled band', async () => {
+    expect([0, 2, 3, 19, 20, 99].map(rollBand)).toEqual(['gold', 'gold', 'silver', 'silver', 'bronze', 'bronze']);
+    await db.prepare('UPDATE players SET price_pence = 450 WHERE id = 101').run(); // Raya is the only bronze
+
+    expect(await packStatus(db, alice)).toMatchObject({ event: 8, price_pence: 450, opened: null });
+    const r = await openPack(db, alice, 50);
+    expect(r).toMatchObject({ event: 8, band: 'bronze', player_id: 101, card_price_pence: 450 });
+    await expect(openPack(db, alice, 50)).rejects.toThrow('already opened');
+    expect((await packStatus(db, alice)).opened).toMatchObject({ player_id: 101, band: 'bronze' });
+
+    const pf = await portfolio(db, alice);
+    expect(pf.cash_pence).toBe(10_000 - 450);
+    expect(pf.holdings).toEqual([expect.objectContaining({ player_id: 101, cards: 1, cost_pence: 450 })]);
+    // Opening a pack isn't a trade, so it doesn't nudge the price.
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM trades').first('n')).toBe(0);
+
+    // A gold roll pulls a fit gold card (Palmer is doubtful, so never him).
+    for (let i = 0; i < 5; i++) {
+      await db.prepare('DELETE FROM packs').run();
+      expect([100, 300]).toContain((await openPack(db, bob, 0)).player_id);
+    }
+    // Locked teams are left out: with Arsenal and Chelsea locked, a gold roll can only be Salah.
+    provider.fixtures[0].kickoff_time = iso(Date.now() + 1 * HOUR);
+    await runSync(db, provider);
+    await db.prepare('DELETE FROM packs').run();
+    expect((await openPack(db, bob, 0)).player_id).toBe(300);
+    // Raya, the only bronze, is locked too, so a bronze roll has nothing to give.
+    await db.prepare('DELETE FROM packs').run();
+    await expect(openPack(db, bob, 50)).rejects.toThrow('No cards are available');
+  });
+
+  it('refuses a pack without enough cash', async () => {
+    await buy(db, alice, 300, 7); // 7 × £14 = £98
+    await expect(openPack(db, alice, 0)).rejects.toThrow('Not enough cash');
+    expect((await portfolio(db, alice)).cash_pence).toBe(200);
   });
 });
