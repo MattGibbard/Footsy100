@@ -25,9 +25,9 @@ const saleQuote = (n, price) => {
 
 // Price bands: the card's whole colour comes from its price.
 const BANDS = [
-  { key: 'top', min: 1100, sw: 't', range: '£11.00 and up', note: 'The stars. Premium prices.' },
-  { key: 'mid', min: 750, sw: 'm', range: '£7.50–£10.99', note: 'Regular starters. Room to grow.' },
-  { key: 'low', min: 0, sw: 'l', range: 'Under £7.50', note: 'Bargains. Big upside if they click.' },
+  { key: 'top', name: 'Gold', min: 700, sw: 't', range: '£7.00 and up', note: 'The stars. Premium prices.' },
+  { key: 'mid', name: 'Silver', min: 500, sw: 'm', range: '£5.00–£6.99', note: 'Regular starters. Room to grow.' },
+  { key: 'low', name: 'Bronze', min: 0, sw: 'l', range: 'Under £5.00', note: 'Bargains. Big upside if they click.' },
 ];
 const band = (pence) => BANDS.find((b) => pence >= b.min).key;
 
@@ -361,11 +361,12 @@ const SORTS = {
 const PAGE = 24;
 
 function marketTools(m) {
-  const prefs = (homePage.prefs ??= { q: '', team: '', pos: '', sort: 'price-desc' });
+  const prefs = (homePage.prefs ??= { q: '', team: '', pos: '', band: '', sort: 'price-desc' });
   return `<div class="toolbar">
       <input id="q" type="search" placeholder="Search players" aria-label="Search players" value="${esc(prefs.q)}">
       <select id="team" aria-label="Club"><option value="">All clubs</option>${m.teams.map((t) => `<option value="${t.id}" ${String(t.id) === prefs.team ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>
       <select id="pos" aria-label="Position"><option value="">All positions</option>${Object.entries(POSITIONS).map(([k, v]) => `<option value="${k}" ${k === prefs.pos ? 'selected' : ''}>${v}s</option>`).join('')}</select>
+      <select id="band" aria-label="Card colour"><option value="">All cards</option>${BANDS.map((b) => `<option value="${b.key}" ${b.key === prefs.band ? 'selected' : ''}>${b.name}</option>`).join('')}</select>
       <select id="sort" aria-label="Sort">${Object.entries(SORTS).map(([k, s]) => `<option value="${k}" ${k === prefs.sort ? 'selected' : ''}>${s.label}</option>`).join('')}</select>
     </div>
     <p class="small muted" id="count"></p>
@@ -385,6 +386,7 @@ function wireMarket(m) {
         (p) =>
           (!prefs.team || String(p.team_id) === prefs.team) &&
           (!prefs.pos || p.position === prefs.pos) &&
+          (!prefs.band || band(p.price_pence) === prefs.band) &&
           (!q || `${p.first_name} ${p.second_name} ${p.web_name}`.toLowerCase().includes(q)),
       )
       .map((p) => [key(p), p])
@@ -407,6 +409,7 @@ function wireMarket(m) {
   document.getElementById('q').addEventListener('input', (e) => ((prefs.q = e.target.value), redo()));
   document.getElementById('team').addEventListener('change', (e) => ((prefs.team = e.target.value), redo()));
   document.getElementById('pos').addEventListener('change', (e) => ((prefs.pos = e.target.value), redo()));
+  document.getElementById('band').addEventListener('change', (e) => ((prefs.band = e.target.value), redo()));
   document.getElementById('sort').addEventListener('change', (e) => ((prefs.sort = e.target.value), redo()));
   document.getElementById('more').addEventListener('click', () => ((limit += PAGE), draw()));
 }
@@ -697,7 +700,7 @@ async function fixturesPage() {
     if (!a) return;
     e.preventDefault();
     e.stopPropagation();
-    homePage.prefs = { ...(homePage.prefs ?? { q: '', pos: '', sort: 'price-desc' }), team: a.dataset.team, q: '' };
+    homePage.prefs = { ...(homePage.prefs ?? { q: '', pos: '', band: '', sort: 'price-desc' }), team: a.dataset.team, q: '' };
     navigate('/');
   });
 }
@@ -855,7 +858,7 @@ function rulesPage() {
       <ol>
         <li>Sign up and get a <b>${money(c.starting_cash_pence)}</b> virtual budget for the season. It's play money only: it can't be topped up or cashed out.</li>
         <li>Every Premier League player is a card. Buy cards at the player's current price. You can own several of the same card, but only whole cards.</li>
-        <li>A card's colour shows its price band: gold from £11.00, silver from £7.50 to £10.99, bronze under £7.50. Cards change colour as prices move.</li>
+        <li>A card's colour shows its price band: gold from £7.00, silver from £5.00 to £6.99, bronze under £5.00. Cards change colour as prices move.</li>
         <li>Trading on a player locks <b>2 hours before kick-off</b>.</li>
         <li>After the final whistle, once the official stats are confirmed, his price moves based on how he played (and a little on how many cards people bought or sold). Then trading reopens.</li>
         <li>Selling costs a <b>${c.sell_fee_bp / 100}% fee</b>.</li>
