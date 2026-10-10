@@ -414,7 +414,7 @@ function wireMarket(m) {
   document.getElementById('more').addEventListener('click', () => ((limit += PAGE), draw()));
 }
 
-// Top 10 risers and fallers over the last week, by % change.
+// Top 10 risers and fallers over the last week, by % change. Each photo is ringed in its card's band colour.
 function moversSection(m) {
   const list = (title, rows) => {
     const body = rows
@@ -422,7 +422,8 @@ function moversSection(m) {
         const p = m.playerById[r.player_id];
         if (!p) return '';
         const ch = pct(r.to_pence, r.from_pence);
-        return `<li class="clickable" data-player="${p.id}"><span class="rank">${i + 1}</span>${img('photo', p.code)}
+        const b = BANDS.find((x) => x.key === band(p.price_pence));
+        return `<li class="clickable rarity band-${b.key}" data-player="${p.id}" title="${b.name} card"><span class="rank">${i + 1}</span>${img('photo', p.code)}
           <span class="who-name">${esc(p.web_name)} <span class="muted small">${esc(m.teamById[p.team_id]?.short_name)}</span></span>
           <span class="val">${money(r.to_pence)}</span><span class="chg ${cls(ch)}">${pctText(ch)}</span></li>`;
       })
