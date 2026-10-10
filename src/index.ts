@@ -29,8 +29,11 @@ app.onError((err, c) => {
   return c.json({ error: 'Something went wrong' }, 500);
 });
 
+// Public, same-for-everyone endpoints skip the session lookup to save a database round trip.
+const NO_SESSION = new Set(['/api/players', '/api/config', '/api/status']);
+
 app.use('*', async (c, next) => {
-  c.set('user', await userForSession(c.env, getCookie(c, SESSION_COOKIE)));
+  c.set('user', NO_SESSION.has(c.req.path) ? null : await userForSession(c.env, getCookie(c, SESSION_COOKIE)));
   await next();
 });
 
@@ -112,7 +115,16 @@ app.get('/config', (c) =>
   }),
 );
 
-app.get('/players', async (c) => c.json(await listPlayers(c.env.DB)));
+// The player list is the same for everyone and only changes when the cron runs, so each
+// Worker instance keeps it for 30 seconds and most refreshes skip the database.
+const PLAYERS_TTL_MS = 30_000;
+let playersCache: { json: string; at: number } | null = null;
+app.get('/players', async (c) => {
+  if (!playersCache || Date.now() - playersCache.at > PLAYERS_TTL_MS) {
+    playersCache = { json: JSON.stringify(await listPlayers(c.env.DB)), at: Date.now() };
+  }
+  return c.body(playersCache.json, 200, { 'Content-Type': 'application/json; charset=UTF-8' });
+});
 
 app.get('/players/:id', async (c) => c.json(await getPlayer(c.env.DB, intParam(c.req.param('id')), c.get('user')?.id ?? null)));
 
