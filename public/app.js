@@ -479,9 +479,21 @@ function upcomingFixtures(list, teamId, teamById) {
 }
 
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+const bpText = (bp) => `${bp > 0 ? '+' : bp < 0 ? '−' : ''}${Math.abs(bp / 100).toFixed(bp % 100 ? 2 : 0)}%`;
+
+// What a player at this price is expected to earn from his stats (basis points),
+// mirroring expectedBp in src/pricing.ts.
+function expectedBp(position, pricePence, minutes = 90) {
+  const e = state.config?.weights?.expected?.[position];
+  if (!e) return null;
+  return Math.round(((e.base + (e.perPound * pricePence) / 100) * Math.min(minutes, 90)) / 90);
+}
+
+// Parts of a breakdown that aren't from his own stats.
+const NON_STAT_KEYS = ['expected', 'market', 'demand', 'did_not_play'];
 
 // Plain-English line for each part of a stored price move (the keys scoreMatch writes).
-function reasonLabel(key, s, bp) {
+function reasonLabel(key, s, bp, p) {
   const n = (k) => s?.[k] ?? 0;
   switch (key) {
     case 'appearance': return n('minutes') >= 60 ? `Played ${n('minutes')} minutes` : `Came on for ${plural(n('minutes'), 'minute')}`;
@@ -498,8 +510,8 @@ function reasonLabel(key, s, bp) {
     case 'own_goals': return n('own_goals') > 1 ? `${n('own_goals')} own goals` : 'Own goal';
     case 'bonus': return n('bonus') ? plural(n('bonus'), 'bonus point') : 'Bonus points';
     case 'defensive_contribution': return n('defensive_contribution') ? `Defensive work (${n('defensive_contribution')} tackles, blocks, etc.)` : 'Defensive work';
-    case 'expected': return 'Expected of a player at his price';
-    case 'market': return bp < 0 ? 'Market adjustment (players are beating expectations)' : 'Market adjustment (players are missing expectations)';
+    case 'expected': return `Expected of a ${money(s.old_price_pence)} ${(POSITIONS[p?.position] ?? 'player').toLowerCase()}${n('minutes') < 90 ? ` in ${plural(n('minutes'), 'minute')}` : ''}`;
+    case 'market': return 'Market adjustment';
     case 'demand': return bp > 0 ? 'Fans buying his card' : 'Fans selling his card';
     default: return key.replace(/_/g, ' ');
   }
@@ -507,11 +519,11 @@ function reasonLabel(key, s, bp) {
 
 // Turns a match's stored breakdown (basis points per reason) into lines in pence
 // that add up exactly to the real price move, including the per-match cap.
-function matchBreakdown(s) {
+function matchBreakdown(s, p) {
   let parts = {};
   try { parts = JSON.parse(s.reason || '{}'); } catch {}
   const w = state.config?.weights ?? {};
-  const items = Object.entries(parts).map(([key, bp]) => ({ label: reasonLabel(key, s, bp), bp }));
+  const items = Object.entries(parts).map(([key, bp]) => ({ label: reasonLabel(key, s, bp, p), bp }));
   const total = items.reduce((a, i) => a + i.bp, 0);
   const capped = Math.min(w.maxRise ?? Infinity, Math.max(w.maxFall ?? -Infinity, total));
   if (capped !== total) items.push({ label: total > 0 ? `Capped at the ${w.maxRise / 100}% max rise per match` : `Capped at the ${-w.maxFall / 100}% max fall per match`, bp: capped - total });
@@ -526,13 +538,28 @@ function matchBreakdown(s) {
   return items.map((it, i) => ({ ...it, pence: pence[i] }));
 }
 
+// One plain sentence on why his price moved in this match.
+function matchVerdict(s) {
+  let parts = {};
+  try { parts = JSON.parse(s.reason || '{}'); } catch {}
+  if (parts.did_not_play) return "He didn't play, so his price drifted down.";
+  if (parts.expected === undefined) return null; // settled before prices were judged against expectations
+  const stats = Object.entries(parts).filter(([k]) => !NON_STAT_KEYS.includes(k)).reduce((a, [, v]) => a + v, 0);
+  const need = -parts.expected;
+  const versus = `his stats earned ${bpText(stats)} against the ${bpText(need)} expected at his price`;
+  if (stats > need) return `<b>Beat expectations:</b> ${versus}.`;
+  if (stats < need) return `<b>Below expectations:</b> ${versus}.`;
+  return `<b>Met expectations:</b> ${versus}.`;
+}
+
 function matchCard(s, p, teamById) {
   const home = s.team_h === p.team_id;
   const opp = teamById[home ? s.team_a : s.team_h];
   const move = s.new_price_pence - s.old_price_pence;
   const ch = pct(s.new_price_pence, s.old_price_pence);
-  const lines = matchBreakdown(s)
-    .map((l) => `<li><span>${esc(l.label)}</span><span class="muted small">${l.bp > 0 ? '+' : '−'}${Math.abs(l.bp / 100).toFixed(l.bp % 100 ? 2 : 0)}%</span><span class="amt ${cls(l.pence)}">${signedMoney(l.pence)}</span></li>`)
+  const verdict = matchVerdict(s);
+  const lines = matchBreakdown(s, p)
+    .map((l) => `<li><span>${esc(l.label)}</span><span class="muted small">${bpText(l.bp)}</span><span class="amt ${cls(l.pence)}">${signedMoney(l.pence)}</span></li>`)
     .join('');
   return `<div class="panel tight match">
     <div class="match-head">
@@ -541,6 +568,7 @@ function matchCard(s, p, teamById) {
       <div class="match-move"><span class="${cls(move)}">${signedMoney(move)}</span> <span class="small ${cls(ch)}">${pctText(ch)}</span>
         <div class="small muted">${money(s.old_price_pence)} → ${money(s.new_price_pence)}</div></div>
     </div>
+    ${verdict ? `<p class="small verdict">${verdict}</p>` : ''}
     <ul class="breakdown">${lines || '<li><span class="muted">No change</span></li>'}</ul>
   </div>`;
 }
@@ -573,7 +601,11 @@ async function playerPage(id) {
         <div class="panel tight">${sparkline(prices)}</div>
         ${upcomingFixtures(d.upcoming, p.team_id, m.teamById)}
         <h2>Recent matches</h2>
-        <p class="small muted">What moved his price in each match.</p>
+        ${(() => {
+          const need = expectedBp(p.position, p.price_pence);
+          return need == null ? '<p class="small muted">What moved his price in each match.</p>'
+            : `<p class="small muted">At ${money(p.price_pence)}, a ${POSITIONS[p.position].toLowerCase()} is expected to earn <b>${bpText(need)}</b> from his stats in a full match. Do better and his price rises; do worse and it falls. <a href="/how-it-works" data-link>How prices move</a></p>`;
+        })()}
         ${d.matches.length ? `<div class="matches">${d.matches.map((s) => matchCard(s, p, m.teamById)).join('')}</div>` : '<p class="muted">No settled matches yet.</p>'}
       </div>
     </div>`;
@@ -885,26 +917,28 @@ function accountPage() {
 function rulesPage() {
   const c = state.config;
   const w = c.weights;
-  const bp = (v) => `${v > 0 ? '+' : ''}${(v / 100).toFixed(1).replace(/\.0$/, '')}%`;
-  const byPos = (o) => ['GKP', 'DEF', 'MID', 'FWD'].map((p) => `${p} ${bp(o[p])}`).join(', ');
-  const rows = [
-    ['Did not play', bp(w.didNotPlay)],
-    ['Goal', byPos(w.goal)],
-    ['Assist', bp(w.assist)],
-    ['Clean sheet (60+ minutes)', byPos(w.cleanSheet)],
-    ['Every 2 goals conceded', byPos(w.per2GoalsConceded)],
-    ['Every 3 saves (goalkeepers)', bp(w.per3Saves)],
-    ['Penalty saved', bp(w.penaltySaved)],
-    ['Penalty missed', bp(w.penaltyMissed)],
-    ['Yellow card', bp(w.yellowCard)],
-    ['Red card', bp(w.redCard)],
-    ['Own goal', bp(w.ownGoal)],
-    ['Each FPL bonus point (1 to 3)', bp(w.perBonusPoint)],
-    ['Defensive contribution threshold reached', bp(w.defensiveContribution)],
-    ['Expected of him over 90 minutes (taken off every match he plays, less for part of a match)', ['GKP', 'DEF', 'MID', 'FWD'].map((p) => `${p} ${[5, 10].map((pounds) => `£${pounds}: ${bp(-(w.expected[p].base + w.expected[p].perPound * pounds))}`).join(' / ')}`).join(', ')],
-    ['Market adjustment: the season\'s average beat or miss so far, taken back off', `up to ±${(w.marketCap / 100).toFixed(0)}%`],
-    ['Demand: every 10 cards net bought since his last match', `${bp(w.demandPer10Cards)} (capped at ±${(w.demandCap / 100).toFixed(0)}%)`],
+  const bp = (v) => (v ? bpText(v) : '–');
+  const POS = ['GKP', 'DEF', 'MID', 'FWD'];
+  const same = (v) => POS.map(() => v);
+  const statRows = [
+    ['Goal', POS.map((p) => w.goal[p])],
+    ['Assist', same(w.assist)],
+    ['Clean sheet (60+ minutes)', POS.map((p) => w.cleanSheet[p])],
+    ['Every 2 goals conceded', POS.map((p) => w.per2GoalsConceded[p])],
+    ['Every 3 saves', POS.map((p) => (p === 'GKP' ? w.per3Saves : 0))],
+    ['Penalty saved', same(w.penaltySaved)],
+    ['Penalty missed', same(w.penaltyMissed)],
+    ['Each FPL bonus point (1 to 3)', same(w.perBonusPoint)],
+    ['Defensive contribution threshold reached', POS.map((p) => (p === 'GKP' ? 0 : w.defensiveContribution))],
+    ['Yellow card', same(w.yellowCard)],
+    ['Red card', same(w.redCard)],
+    ['Own goal', same(w.ownGoal)],
   ];
+  const prices = [400, 600, 800, 1000, 1200, 1400];
+  // Worked example: a £10 midfielder who scores once and gets 2 bonus points in a full match.
+  const exStats = w.goal.MID + 2 * w.perBonusPoint;
+  const exNeed = expectedBp('MID', 1000);
+  const exMove = exStats - exNeed;
   app.innerHTML = `
     <h1>How it works</h1>
     <div class="panel rules">
@@ -912,15 +946,38 @@ function rulesPage() {
         <li>Sign up and get a <b>${money(c.starting_cash_pence)}</b> virtual budget for the season. It's play money only: it can't be topped up or cashed out.</li>
         <li>Every Premier League player is a card. Buy cards at the player's current price. You can own several of the same card, but only whole cards.</li>
         <li>A card's colour shows its price band: gold from £7.00, silver from £5.00 to £6.99, bronze under £5.00. Cards change colour as prices move.</li>
-        <li>Trading on a player locks <b>2 hours before kick-off</b>.</li>
-        <li>After the final whistle, once the official stats are confirmed, his price moves based on how he played compared with what's expected of a player at his price (and a little on how many cards people bought or sold). An ordinary game leaves his price about where it was, so you profit by backing players before they outperform, not just by holding. Then trading reopens.</li>
+        <li>Trading on a player locks <b>2 hours before kick-off</b>. Once the official stats are confirmed after the final whistle, his price moves (see below) and trading reopens.</li>
         <li>Selling costs a <b>${c.sell_fee_bp / 100}% fee</b>.</li>
         <li>The leaderboard ranks everyone by total value: cash plus cards at today's prices. Everyone restarts with ${money(c.starting_cash_pence)} each season, and the all-time table adds up your profit across seasons.</li>
       </ol>
     </div>
-    <h2>Price moves per match</h2>
-    <div class="table-wrap"><table class="weights"><tbody>${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</tbody></table></div>
-    <p class="small muted">Moves add up and are capped between ${bp(w.maxFall)} and ${bp(w.maxRise)} per match.</p>`;
+
+    <h2>How prices move</h2>
+    <div class="panel rules">
+      <p>Prices reward players who do <b>better than expected for their price</b>, not just players who turn up. An ordinary game leaves a price about where it was, so you make money by backing players before they outperform, not by holding cards all season.</p>
+      <ol>
+        <li><b>Stats score.</b> Everything he did in the match adds up to a percentage, using the stat points below.</li>
+        <li><b>Minus what's expected.</b> We take off what a player at his price and position normally earns in that many minutes. Pricier players are expected to do more, so a star has to keep delivering just to hold his value.</li>
+        <li><b>Market adjustment.</b> If players across the league have been beating expectations on average this season, every match takes that average back off (or adds it back if they've been missing). This keeps the market as a whole from drifting up or down. It's capped at ±${w.marketCap / 100}%.</li>
+        <li><b>Demand.</b> Every 10 cards bought (minus sold) since his last match adds ${bp(w.demandPer10Cards)}, capped at ±${w.demandCap / 100}%.</li>
+        <li><b>Didn't play?</b> If his team plays without him, his price drifts ${bp(w.didNotPlay)}.</li>
+      </ol>
+      <p>The total move is capped between ${bp(w.maxFall)} and ${bp(w.maxRise)} per match. Every player's page shows this breakdown for each of his matches.</p>
+      ${exNeed != null ? `<p class="small muted"><b>Example:</b> a ${money(1000)} midfielder scores once and gets 2 bonus points in a full match. His stats earn ${bp(exStats)}, he was expected to earn ${bp(exNeed)}, so his price moves ${bp(exMove)} to ${money(Math.round(1000 * (1 + exMove / 10000)))}. A quiet 90 minutes would cost him ${bp(-exNeed)}.</p>` : ''}
+    </div>
+
+    <h2>Stat points</h2>
+    <div class="table-wrap"><table class="weights">
+      <thead><tr><th></th>${POS.map((p) => `<th>${p}</th>`).join('')}</tr></thead>
+      <tbody>${statRows.map(([label, vals]) => `<tr><td>${label}</td>${vals.map((v) => `<td>${bp(v)}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>
+
+    <h2>What's expected in a full match</h2>
+    <p class="small muted">Taken off every match he plays (less if he plays part of a match). These are set from last season's data so an average performance is worth about 0%.</p>
+    <div class="table-wrap"><table class="weights">
+      <thead><tr><th>Price</th>${POS.map((p) => `<th>${p}</th>`).join('')}</tr></thead>
+      <tbody>${prices.map((pence) => `<tr><td>${money(pence)}</td>${POS.map((p) => `<td>${bp(expectedBp(p, pence))}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>`;
 }
 
 // ---------- router ----------
